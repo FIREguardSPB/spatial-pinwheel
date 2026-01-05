@@ -1,72 +1,101 @@
 version: "3.9"
 
+# =============================================================================
+# Trading Bot Docker Compose
+# Profiles:
+#   - mock: Local dev with mock data
+#   - tbank_sandbox: TBank sandbox integration
+#   - prod: Production deployment
+# =============================================================================
+
 services:
+  # ---------------------------------------------------------------------------
+  # Database
+  # ---------------------------------------------------------------------------
   postgres:
-    profiles: [ "mock", "tbank_sandbox" ]
+    profiles: [ "mock", "tbank_sandbox", "prod" ]
     image: postgres:16-alpine
     container_name: bot_postgres
     environment:
-      POSTGRES_USER: bot
-      POSTGRES_PASSWORD: bot
-      POSTGRES_DB: botdb
+      POSTGRES_USER: ${POSTGRES_USER:-bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bot}
+      POSTGRES_DB: ${POSTGRES_DB:-botdb}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U bot -d botdb" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bot} -d ${POSTGRES_DB:-botdb}" ]
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # Redis
+  # ---------------------------------------------------------------------------
   redis:
-    profiles: [ "mock", "tbank_sandbox" ]
+    profiles: [ "mock", "tbank_sandbox", "prod" ]
     image: redis:7-alpine
     container_name: bot_redis
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # API Service
+  # ---------------------------------------------------------------------------
   api:
-    profiles: [ "mock", "tbank_sandbox" ]
+    profiles: [ "mock", "tbank_sandbox", "prod" ]
+    image: ${API_IMAGE:-trading-bot-api:local}
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
     container_name: bot_api
     environment:
-      APP_ENV: "prod"
+      APP_ENV: ${APP_ENV:-prod}
       API_PREFIX: "/api/v1"
-      DATABASE_URL: "postgresql+psycopg://bot:bot@postgres:5432/botdb"
+      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-bot}:${POSTGRES_PASSWORD:-bot}@postgres:5432/${POSTGRES_DB:-botdb}"
       REDIS_URL: "redis://redis:6379/0"
       SSE_KEEPALIVE_SECONDS: "20"
-      AUTH_TOKEN: ""
-      # Common Config (can be overridden)
+      AUTH_TOKEN: "${AUTH_TOKEN:-}"
+      GIT_COMMIT: "${GIT_COMMIT:-HEAD}"
     ports:
-      - "3000:3000"
+      - "${API_PORT:-3000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/api/v1/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
+  # ---------------------------------------------------------------------------
+  # Worker Service
+  # ---------------------------------------------------------------------------
   worker:
-    profiles: [ "mock", "tbank_sandbox" ]
+    profiles: [ "mock", "tbank_sandbox", "prod" ]
+    image: ${WORKER_IMAGE:-trading-bot-worker:local}
     build:
       context: ..
       dockerfile: apps/worker/Dockerfile
     container_name: bot_worker
     environment:
-      APP_ENV: "prod"
-      DATABASE_URL: "postgresql+psycopg://bot:bot@postgres:5432/botdb"
+      APP_ENV: ${APP_ENV:-prod}
+      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-bot}:${POSTGRES_PASSWORD:-bot}@postgres:5432/${POSTGRES_DB:-botdb}"
       REDIS_URL: "redis://redis:6379/0"
-      TF: "1m"
-      UNIVERSE_SIZE: "25"
-      SIGNAL_INTERVAL_SECONDS: "30"
-      # Dynamic Env
+      TF: "${TF:-1m}"
+      UNIVERSE_SIZE: "${UNIVERSE_SIZE:-25}"
+      SIGNAL_INTERVAL_SECONDS: "${SIGNAL_INTERVAL_SECONDS:-30}"
       BROKER_PROVIDER: "${BROKER_PROVIDER:-mock}"
       TBANK_TOKEN: "${TBANK_TOKEN:-}"
       TBANK_ACCOUNT_ID: "${TBANK_ACCOUNT_ID:-}"
@@ -76,6 +105,25 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Frontend (Production only)
+  # ---------------------------------------------------------------------------
+  frontend:
+    profiles: [ "prod" ]
+    image: ${FRONTEND_IMAGE:-trading-bot-frontend:local}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: bot_frontend
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
 
 volumes:
   pgdata:
