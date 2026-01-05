@@ -42,6 +42,13 @@ ROLLBACK_TAG="${3:-}"
 COMPOSE_FILE="backend/infra/docker-compose.yml"
 ENV_FILE="backend/infra/.env"
 
+# Load env file if exists (for REGISTRY, REPO, etc.)
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    source "$ENV_FILE"
+    set +a
+fi
+
 # Validate profile
 if [[ ! "$PROFILE" =~ ^(mock|tbank_sandbox|prod)$ ]]; then
     echo -e "${RED}Error: Invalid profile '$PROFILE'${NC}"
@@ -171,9 +178,9 @@ case "$ACTION" in
         
         echo -e "${YELLOW}>>> Rolling back to $ROLLBACK_TAG...${NC}"
         
-        # Determine image registry (from env or default)
+        # Determine image registry (from env or default to real repo)
         REGISTRY=${REGISTRY:-ghcr.io}
-        REPO=${REPO:-owner/repo}
+        REPO=${REPO:-FIREguardSPB/spatial-pinwheel}
         
         # Update image tags
         export API_IMAGE="${REGISTRY}/${REPO}-api:${ROLLBACK_TAG}"

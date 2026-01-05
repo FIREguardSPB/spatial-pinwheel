@@ -112,31 +112,54 @@ jobs:
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          VERSION: ${{ needs.build-and-push.outputs.version }}
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_PREFIX: ${{ env.IMAGE_PREFIX }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: VERSION,REGISTRY,IMAGE_PREFIX
           script: |
             set -e
             cd ${{ secrets.DEPLOY_PATH }}
             
-            echo "=== Pulling latest images ==="
-            docker compose pull
+            echo "=== Deploying version: $VERSION ==="
+            
+            # Export image versions for this specific tag
+            export API_IMAGE="${REGISTRY}/${IMAGE_PREFIX}-api:${VERSION}"
+            export WORKER_IMAGE="${REGISTRY}/${IMAGE_PREFIX}-worker:${VERSION}"
+            export FRONTEND_IMAGE="${REGISTRY}/${IMAGE_PREFIX}-frontend:${VERSION}"
+            
+            echo "API_IMAGE=$API_IMAGE"
+            echo "WORKER_IMAGE=$WORKER_IMAGE"
+            echo "FRONTEND_IMAGE=$FRONTEND_IMAGE"
+            
+            echo "=== Pulling images ==="
+            docker compose --profile prod pull
             
             echo "=== Running database migrations ==="
-            docker compose run --rm api python scripts/update_schema.py
+            docker compose --profile prod run --rm api python scripts/update_schema.py
             
             echo "=== Restarting services ==="
-            docker compose up -d --remove-orphans
+            docker compose --profile prod up -d --remove-orphans
             
             echo "=== Waiting for API to be ready ==="
-            sleep 10
+            for i in {1..30}; do
+              if curl -sf http://localhost:3000/api/v1/health > /dev/null 2>&1; then
+                echo "API ready!"
+                break
+              fi
+              echo "Waiting for API... ($i/30)"
+              sleep 2
+            done
             
             echo "=== Running verification ==="
-            docker compose exec -T api python scripts/verify_settings_integration.py
+            docker compose --profile prod exec -T api python scripts/verify_settings_integration.py
             
             echo "=== Deployment complete ==="
-            docker compose ps
+            docker compose --profile prod ps
 
   # ============================================
   # Post-Deploy Verification
