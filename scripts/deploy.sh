@@ -3,7 +3,7 @@
 # Trading Bot - One-Command Deploy Script
 # =============================================================================
 # Usage:
-#   ./scripts/deploy.sh [profile] [action]
+#   ./scripts/deploy.sh [profile] [action] [args]
 #
 # Profiles:
 #   mock          - Local dev with mock data (default)
@@ -11,14 +11,19 @@
 #   prod          - Production deployment
 #
 # Actions:
-#   up      - Start all services (default)
-#   down    - Stop all services
-#   restart - Restart all services
-#   logs    - Show logs
-#   status  - Show service status
-#   migrate - Run database migrations only
-#   verify  - Run verification script only
-#   clean   - Stop services and remove volumes
+#   up        - Start all services (default)
+#   down      - Stop all services
+#   restart   - Restart all services
+#   logs      - Show logs
+#   status    - Show service status
+#   migrate   - Run database migrations only
+#   verify    - Run verification script only
+#   clean     - Stop services and remove volumes
+#   rollback  - Rollback to a specific version tag
+#
+# Examples:
+#   ./scripts/deploy.sh mock up
+#   ./scripts/deploy.sh prod rollback v1.1.0
 # =============================================================================
 
 set -e
@@ -33,7 +38,9 @@ NC='\033[0m' # No Color
 # Defaults
 PROFILE="${1:-mock}"
 ACTION="${2:-up}"
+ROLLBACK_TAG="${3:-}"
 COMPOSE_FILE="backend/infra/docker-compose.yml"
+ENV_FILE="backend/infra/.env"
 
 # Validate profile
 if [[ ! "$PROFILE" =~ ^(mock|tbank_sandbox|prod)$ ]]; then
@@ -154,9 +161,70 @@ case "$ACTION" in
         fi
         ;;
         
+    rollback)
+        if [[ -z "$ROLLBACK_TAG" ]]; then
+            echo -e "${RED}Error: Rollback requires a version tag${NC}"
+            echo "Usage: ./scripts/deploy.sh $PROFILE rollback <tag>"
+            echo "Example: ./scripts/deploy.sh prod rollback v1.1.0"
+            exit 1
+        fi
+        
+        echo -e "${YELLOW}>>> Rolling back to $ROLLBACK_TAG...${NC}"
+        
+        # Determine image registry (from env or default)
+        REGISTRY=${REGISTRY:-ghcr.io}
+        REPO=${REPO:-owner/repo}
+        
+        # Update image tags
+        export API_IMAGE="${REGISTRY}/${REPO}-api:${ROLLBACK_TAG}"
+        export WORKER_IMAGE="${REGISTRY}/${REPO}-worker:${ROLLBACK_TAG}"
+        export FRONTEND_IMAGE="${REGISTRY}/${REPO}-frontend:${ROLLBACK_TAG}"
+        
+        echo -e "${BLUE}Images:${NC}"
+        echo "  API:      $API_IMAGE"
+        echo "  Worker:   $WORKER_IMAGE"
+        echo "  Frontend: $FRONTEND_IMAGE"
+        
+        # Confirm rollback
+        read -p "Proceed with rollback? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}>>> Rollback cancelled${NC}"
+            exit 0
+        fi
+        
+        echo -e "${GREEN}>>> Pulling images...${NC}"
+        $COMPOSE_CMD pull api worker frontend 2>/dev/null || $COMPOSE_CMD pull api worker
+        
+        echo -e "${GREEN}>>> Restarting services...${NC}"
+        $COMPOSE_CMD up -d --no-build
+        
+        echo -e "${GREEN}>>> Waiting for API to be ready...${NC}"
+        for i in {1..30}; do
+            if curl -sf http://localhost:${API_PORT:-3000}/api/v1/health > /dev/null 2>&1; then
+                echo -e "${GREEN}API ready!${NC}"
+                break
+            fi
+            echo "Waiting for API... ($i/30)"
+            sleep 1
+        done
+        
+        echo -e "${GREEN}>>> Running verification...${NC}"
+        $COMPOSE_CMD exec -T api python scripts/verify_settings_integration.py || {
+            echo -e "${YELLOW}Verification failed - consider rolling back further${NC}"
+        }
+        
+        echo -e "${GREEN}>>> Rollback complete!${NC}"
+        $COMPOSE_CMD ps
+        
+        # Show health
+        echo -e "\n${BLUE}>>> Health Check:${NC}"
+        curl -s http://localhost:${API_PORT:-3000}/api/v1/health | python -m json.tool 2>/dev/null || echo "API not responding"
+        ;;
+        
     *)
         echo -e "${RED}Error: Unknown action '$ACTION'${NC}"
-        echo "Valid actions: up, down, restart, logs, status, migrate, verify, clean"
+        echo "Valid actions: up, down, restart, logs, status, migrate, verify, clean, rollback"
         exit 1
         ;;
 esac

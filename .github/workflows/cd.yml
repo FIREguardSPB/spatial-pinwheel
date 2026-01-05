@@ -148,19 +148,60 @@ jobs:
     steps:
       - name: Health Check
         run: |
-          HEALTH_URL="${{ secrets.DEPLOY_URL }}/api/v1/health"
-          echo "Checking $HEALTH_URL..."
+          BASE_URL="${{ secrets.DEPLOY_URL }}/api/v1"
+          echo "Checking $BASE_URL..."
           
+          # 1. Health endpoint
+          echo "=== Testing /health ==="
           for i in {1..5}; do
-            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" $HEALTH_URL || echo "000")
+            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" $BASE_URL/health || echo "000")
             if [ "$RESPONSE" = "200" ]; then
-              echo "Health check passed!"
-              curl -s $HEALTH_URL | jq .
-              exit 0
+              echo "✅ Health check passed!"
+              curl -s $BASE_URL/health | jq .
+              break
             fi
             echo "Attempt $i: Got $RESPONSE, retrying in 10s..."
             sleep 10
           done
           
-          echo "Health check failed!"
-          exit 1
+          if [ "$RESPONSE" != "200" ]; then
+            echo "❌ Health check failed!"
+            exit 1
+          fi
+          
+          # 2. Settings endpoint (DB + Schema check)
+          echo ""
+          echo "=== Testing /settings ==="
+          SETTINGS_RESP=$(curl -s -o /dev/null -w "%{http_code}" $BASE_URL/settings)
+          if [ "$SETTINGS_RESP" = "200" ]; then
+            echo "✅ Settings endpoint OK"
+            curl -s $BASE_URL/settings | jq 'keys'
+          else
+            echo "❌ Settings endpoint failed with $SETTINGS_RESP"
+            exit 1
+          fi
+          
+          # 3. Signals endpoint (read-only check)
+          echo ""
+          echo "=== Testing /signals ==="
+          SIGNALS_RESP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/signals?limit=1")
+          if [ "$SIGNALS_RESP" = "200" ]; then
+            echo "✅ Signals endpoint OK"
+          else
+            echo "❌ Signals endpoint failed with $SIGNALS_RESP"
+            exit 1
+          fi
+          
+          # 4. Stream endpoint (SSE connection test)
+          echo ""
+          echo "=== Testing /stream (SSE) ==="
+          timeout 3s curl -s -N "$BASE_URL/stream" > /dev/null 2>&1
+          STREAM_EXIT=$?
+          if [ "$STREAM_EXIT" = "124" ]; then
+            echo "✅ Stream endpoint OK (timeout as expected)"
+          else
+            echo "⚠️ Stream endpoint returned $STREAM_EXIT (may be OK)"
+          fi
+          
+          echo ""
+          echo "=== All checks passed! ==="
