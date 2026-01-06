@@ -1,7 +1,7 @@
 [project]
 name = "trading-bot-backend"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.111.0",
   "uvicorn[standard]>=0.30.0",
@@ -17,6 +17,14 @@ dependencies = [
   "protobuf>=4.25.0",
   "grpcio-tools>=1.62.0",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["apps*", "core*"]
+exclude = ["vendor*", "temp_investAPI*", "infra*", "tests*", "scripts*"]
 
 [project.optional-dependencies]
 dev = [
@@ -34,9 +42,9 @@ extend-exclude = "vendor"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py310"
 exclude = ["vendor/*", "*_pb2.py", "*_pb2_grpc.py", "*_pb2.pyi"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.10"
 strict = false
