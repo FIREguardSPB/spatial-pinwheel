@@ -30,7 +30,6 @@ export class MockStreamService {
     private dispatcher: Dispatcher;
     private generator: ScenarioGenerator;
     private currentCandle: Candle | null = null;
-    private lastTickTime: number = 0;
 
     constructor(dispatcher: Dispatcher) {
         this.dispatcher = dispatcher;
@@ -39,7 +38,6 @@ export class MockStreamService {
 
     start() {
         console.log('[Mock] Starting Cyclic Demo Mode (15min loop)');
-        this.lastTickTime = Date.now();
 
         // 1. Initial State
         this.emitStatus();
