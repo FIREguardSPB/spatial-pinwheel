@@ -3,6 +3,7 @@ from core.config import settings
 import orjson
 import time
 
+
 class EventBus:
     def __init__(self):
         self.redis = redis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -13,11 +14,7 @@ class EventBus:
         """
         Publishes a unified event: {type, ts, data}
         """
-        payload = {
-             "type": type,
-             "ts": int(time.time() * 1000),
-             "data": data
-        }
+        payload = {"type": type, "ts": int(time.time() * 1000), "data": data}
         await self.redis.publish(self.channel, orjson.dumps(payload).decode())
 
     async def subscribe(self):
@@ -29,6 +26,7 @@ class EventBus:
 
     async def close(self):
         await self.redis.close()
+
 
 # Global bus instance (users should use dependency injection or context manager in real app, singleton ok for MVP)
 bus = EventBus()

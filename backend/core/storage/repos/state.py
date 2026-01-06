@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from core.storage.models import Order, Trade, Position, DecisionLog
 from sqlalchemy.exc import IntegrityError
 
+
 # --- Orders ---
 def create_order(db: Session, order_data: dict) -> Order:
     try:
@@ -13,12 +14,18 @@ def create_order(db: Session, order_data: dict) -> Order:
     except IntegrityError:
         db.rollback()
         # Idempotency check: if related_signal_id exists, return existing order
-        if order_data.get('related_signal_id'):
-            return db.query(Order).filter(Order.related_signal_id == order_data['related_signal_id']).first()
+        if order_data.get("related_signal_id"):
+            return (
+                db.query(Order)
+                .filter(Order.related_signal_id == order_data["related_signal_id"])
+                .first()
+            )
         raise
+
 
 def list_orders(db: Session, limit: int = 50) -> list[Order]:
     return db.query(Order).order_by(Order.ts.desc()).limit(limit).all()
+
 
 # --- Trades ---
 def create_trade(db: Session, trade_data: dict) -> Trade:
@@ -28,12 +35,14 @@ def create_trade(db: Session, trade_data: dict) -> Trade:
     db.refresh(trade)
     return trade
 
+
 def list_trades(db: Session, limit: int = 50) -> list[Trade]:
     return db.query(Trade).order_by(Trade.ts.desc()).limit(limit).all()
 
+
 # --- Positions ---
 def upsert_position(db: Session, pos_data: dict) -> Position:
-    pos = db.query(Position).filter(Position.instrument_id == pos_data['instrument_id']).first()
+    pos = db.query(Position).filter(Position.instrument_id == pos_data["instrument_id"]).first()
     if not pos:
         pos = Position(**pos_data)
         db.add(pos)
@@ -44,8 +53,10 @@ def upsert_position(db: Session, pos_data: dict) -> Position:
     db.refresh(pos)
     return pos
 
+
 def list_positions(db: Session) -> list[Position]:
     return db.query(Position).all()
+
 
 # --- Logs ---
 def append_log(db: Session, log_data: dict) -> DecisionLog:
@@ -54,6 +65,7 @@ def append_log(db: Session, log_data: dict) -> DecisionLog:
     db.commit()
     db.refresh(log)
     return log
+
 
 def list_logs(db: Session, limit: int = 50) -> list[DecisionLog]:
     return db.query(DecisionLog).order_by(DecisionLog.ts.desc()).limit(limit).all()

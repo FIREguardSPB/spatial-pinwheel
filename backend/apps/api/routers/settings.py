@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from core.storage.session import get_db
 from core.storage.repos import settings as repo
 from core.models import schemas
 
 router = APIRouter()
+
 
 @router.get("", response_model=schemas.RiskSettings)
 def get_settings(db: Session = Depends(get_db)):
@@ -21,7 +22,10 @@ def get_settings(db: Session = Depends(get_db)):
         rr_target=settings_db.rr_target,
         time_stop_bars=settings_db.time_stop_bars,
         close_before_session_end_minutes=settings_db.close_before_session_end_minutes,
-        cooldown_after_losses={"losses": settings_db.cooldown_losses, "minutes": settings_db.cooldown_minutes},
+        cooldown_after_losses={
+            "losses": settings_db.cooldown_losses,
+            "minutes": settings_db.cooldown_minutes,
+        },
         atr_stop_hard_min=settings_db.atr_stop_hard_min,
         atr_stop_hard_max=settings_db.atr_stop_hard_max,
         atr_stop_soft_min=settings_db.atr_stop_soft_min,
@@ -33,8 +37,9 @@ def get_settings(db: Session = Depends(get_db)):
         w_momentum=settings_db.w_momentum,
         w_levels=settings_db.w_levels,
         w_costs=settings_db.w_costs,
-        w_liquidity=settings_db.w_liquidity
+        w_liquidity=settings_db.w_liquidity,
     )
+
 
 @router.put("", response_model=schemas.RiskSettings)
 def update_settings(update_data: schemas.RiskSettings, db: Session = Depends(get_db)):
@@ -48,7 +53,10 @@ def update_settings(update_data: schemas.RiskSettings, db: Session = Depends(get
         rr_target=settings_db.rr_target,
         time_stop_bars=settings_db.time_stop_bars,
         close_before_session_end_minutes=settings_db.close_before_session_end_minutes,
-        cooldown_after_losses={"losses": settings_db.cooldown_losses, "minutes": settings_db.cooldown_minutes},
+        cooldown_after_losses={
+            "losses": settings_db.cooldown_losses,
+            "minutes": settings_db.cooldown_minutes,
+        },
         atr_stop_hard_min=settings_db.atr_stop_hard_min,
         atr_stop_hard_max=settings_db.atr_stop_hard_max,
         atr_stop_soft_min=settings_db.atr_stop_soft_min,
@@ -60,5 +68,5 @@ def update_settings(update_data: schemas.RiskSettings, db: Session = Depends(get
         w_momentum=settings_db.w_momentum,
         w_levels=settings_db.w_levels,
         w_costs=settings_db.w_costs,
-        w_liquidity=settings_db.w_liquidity
+        w_liquidity=settings_db.w_liquidity,
     )

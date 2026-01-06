@@ -1,1 +1,1 @@
-from .adapter import TBankGrpcAdapter
+from .adapter import TBankGrpcAdapter as TBankGrpcAdapter

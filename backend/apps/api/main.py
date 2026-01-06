@@ -10,38 +10,34 @@ app = FastAPI(title="Trading Bot API", version=__version__)
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # For MVP
+    allow_origins=["*"],  # For MVP
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Health
+
 # Health
 @app.get(config.API_PREFIX + "/health")
 async def health():
-    # from core.version import __version__ (Using global)
-    
-    # Mock commit for now or read from env
-    commit = "HEAD" 
-    
+    import time
+    import os
+
     # Broker Info
     broker_info = {
         "provider": config.BROKER_PROVIDER,
         "sandbox": config.TBANK_SANDBOX if config.BROKER_PROVIDER == "tbank" else False,
-        "status": "connected", # Ideally check adapter health
+        "status": "connected",  # Ideally check adapter health
     }
-    
-    import time
-    import os
-    
+
     return {
-        "status": "ok", 
+        "status": "ok",
         "version": __version__,
         "commit": os.getenv("GIT_COMMIT", "HEAD")[:7],
         "ts": int(time.time() * 1000),
-        "broker": broker_info
+        "broker": broker_info,
     }
+
 
 # Routers
 app.include_router(settings.router, prefix=config.API_PREFIX + "/settings", tags=["settings"])

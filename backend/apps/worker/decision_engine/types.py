@@ -3,15 +3,18 @@ from typing import List, Dict, Optional, Any
 from decimal import Decimal
 from pydantic import BaseModel, Field
 
+
 class Decision(str, Enum):
     TAKE = "TAKE"
     SKIP = "SKIP"
     REJECT = "REJECT"
 
+
 class Severity(str, Enum):
     INFO = "info"
     WARN = "warn"
     BLOCK = "block"
+
 
 class ReasonCode(str, Enum):
     # Hard Blocks
@@ -41,32 +44,35 @@ class ReasonCode(str, Enum):
     LIQUIDITY_UNKNOWN = "LIQUIDITY_UNKNOWN"
     LIQUIDITY_BAD = "LIQUIDITY_BAD"
 
+
 class Reason(BaseModel):
     code: ReasonCode
     severity: Severity
     msg: str
 
+
 class MarketSnapshot(BaseModel):
     # Last N candles for analysis (e.g. 200)
-    candles: List[Dict[str, Any]] # [{"close": ..., "time": ...}]
+    candles: List[Dict[str, Any]]  # [{"close": ..., "time": ...}]
     last_price: Decimal
     spread: Optional[Decimal] = None
     volume_24h: Optional[Decimal] = None
 
+
 class DecisionResult(BaseModel):
     decision: Decision
     # Normalized Percentage (0-100) - Primary for Logic
-    score_pct: int 
+    score_pct: int
     threshold_pct: int
-    
+
     # Debug / Calibration Data
     score_raw: int = 0
     score_max: int = 0
-    
+
     # Legacy/Backward compat (optional, can alias to score_pct or score_raw)
-    score: int 
-    threshold: int 
-    
+    score: int
+    threshold: int
+
     reasons: List[Reason] = Field(default_factory=list)
-    metrics: Dict[str, Any] = Field(default_factory=dict) # Allow None/Floats
+    metrics: Dict[str, Any] = Field(default_factory=dict)  # Allow None/Floats
     adjustments: Dict[str, Any] = Field(default_factory=dict)

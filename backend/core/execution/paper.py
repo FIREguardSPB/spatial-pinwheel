@@ -5,6 +5,7 @@ from core.events.bus import bus
 import time
 import uuid
 
+
 class PaperExecutionEngine:
     def __init__(self, db: Session):
         self.db = db
@@ -19,39 +20,41 @@ class PaperExecutionEngine:
 
         # 2. Risk Check (Double check before execution)
         # Skip for MVP speed, assume approved means manual check passed or risk was checked at approve time.
-        
+
         # 3. Create Order
         # Normalize Qty (P0.2)
-        qty = self.risk.normalize_qty(signal.size, lot_size=10) # Mock lot 10
-        
+        qty = self.risk.normalize_qty(signal.size, lot_size=10)  # Mock lot 10
+
         order = Order(
             order_id=f"ord_{uuid.uuid4().hex[:8]}",
             instrument_id=signal.instrument_id,
             ts=int(time.time() * 1000),
             side=signal.side,
-            type="MARKET", # Execution is immediate paper fill
+            type="MARKET",  # Execution is immediate paper fill
             price=signal.entry,
             qty=qty,
             filled_qty=qty,
             status="FILLED",
-            related_signal_id=signal.id
+            related_signal_id=signal.id,
         )
         self.db.add(order)
-        
+
         # 4. Create Trade
         trade = Trade(
             trade_id=f"trd_{uuid.uuid4().hex[:8]}",
             instrument_id=signal.instrument_id,
             ts=int(time.time() * 1000),
             side=signal.side,
-            price=signal.entry, # Fill at entry price
+            price=signal.entry,  # Fill at entry price
             qty=qty,
-            order_id=order.order_id
+            order_id=order.order_id,
         )
         self.db.add(trade)
-        
+
         # 5. Update/Create Position
-        position = self.db.query(Position).filter(Position.instrument_id == signal.instrument_id).first()
+        position = (
+            self.db.query(Position).filter(Position.instrument_id == signal.instrument_id).first()
+        )
         if not position:
             position = Position(
                 instrument_id=signal.instrument_id,
@@ -60,7 +63,7 @@ class PaperExecutionEngine:
                 avg_price=signal.entry,
                 sl=signal.sl,
                 tp=signal.tp,
-                opened_ts=int(time.time() * 1000)
+                opened_ts=int(time.time() * 1000),
             )
             self.db.add(position)
         else:
@@ -75,27 +78,27 @@ class PaperExecutionEngine:
             else:
                 # Opposite side - simplify: close old, open new remaining?
                 # Spec doesn't demand full FIFO.
-                pass 
-        
+                pass
+
         # 6. Update Signal Status
         signal.status = "executed"
-        
+
         # 7. Commit
         self.db.commit()
-        
+
         # 8. Publish Events
         await bus.publish("orders_updated", {"order_id": order.order_id})
         await bus.publish("trade_filled", {"trade_id": trade.trade_id})
         await bus.publish("positions_updated", {"instrument_id": position.instrument_id})
         await bus.publish("signal_updated", {"id": signal.id, "status": "executed"})
-        
+
         # Log
         log = DecisionLog(
-             id=f"log_{uuid.uuid4().hex[:8]}",
-             ts=int(time.time() * 1000),
-             type="trade_filled",
-             message=f"Filled {qty} @ {signal.entry} for {signal.instrument_id}",
-             payload={"trade_id": trade.trade_id}
+            id=f"log_{uuid.uuid4().hex[:8]}",
+            ts=int(time.time() * 1000),
+            type="trade_filled",
+            message=f"Filled {qty} @ {signal.entry} for {signal.instrument_id}",
+            payload={"trade_id": trade.trade_id},
         )
         self.db.add(log)
         self.db.commit()
