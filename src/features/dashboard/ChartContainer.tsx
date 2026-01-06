@@ -1,12 +1,42 @@
-import { useEffect, useRef } from 'react';
-import { createChart, CandlestickSeries, createSeriesMarkers, type IChartApi, type CandlestickData, type Time } from 'lightweight-charts';
+import { useEffect, useRef, useMemo } from 'react';
+import {
+    createChart,
+    CandlestickSeries,
+    createSeriesMarkers,
+    type IChartApi,
+    type CandlestickData,
+    type Time,
+    type ISeriesApi,
+    type SeriesMarkerPosition,
+    type SeriesMarkerShape,
+    ColorType,
+    type IPriceLine,
+} from 'lightweight-charts';
 import { useQuery } from '@tanstack/react-query';
 import { useAppStore } from '../../store';
 import { apiClient } from '../../services/api';
 import { streamService } from '../../services/stream';
-import type { Candle, Signal } from '../../types';
+import type { Signal } from '../../types';
 import { COLORS, EVENTS, QUERY_KEYS, API_ENDPOINTS } from '../../constants';
 import { generateMockCandles } from '../../utils/mockUtils';
+
+interface CandleData {
+    time: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+}
+
+interface Position {
+    instrument_id: string;
+    avg_price?: number;
+    entry?: number;
+    sl?: number;
+    tp?: number;
+}
+
+type StreamEventHandler = (payload: any) => void;
 
 interface ChartContainerProps {
     signals?: Signal[];
@@ -15,14 +45,17 @@ interface ChartContainerProps {
 export const ChartContainer: React.FC<ChartContainerProps> = ({ signals = [] }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
-    const candleSeriesRef = useRef<any>(null);
+    const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
     const markersPluginRef = useRef<any>(null);
-    const activeLinesRef = useRef<any[]>([]);
+    const activeLinesRef = useRef<IPriceLine[]>([]);
 
     const { selectedInstrument, selectedTimeframe, candles, addCandle } = useAppStore();
 
     // 1. Fetch Historical Data
-    const historicalCandles = candles[`${selectedInstrument}-${selectedTimeframe}`] || [];
+    const historicalCandles = useMemo(
+        () => candles[`${selectedInstrument}-${selectedTimeframe}`] || [],
+        [candles, selectedInstrument, selectedTimeframe]
+    );
 
     // Logic to fetch if empty?
     const { refetch: fetchHistory, isFetching: isHistoryLoading } = useQuery({
@@ -37,7 +70,7 @@ export const ChartContainer: React.FC<ChartContainerProps> = ({ signals = [] }) 
             }
 
             // Normal API fetch (even if Backend is MOCK, it serves via API)
-            const res = await apiClient.get<any[]>(`${API_ENDPOINTS.CANDLES}/${selectedInstrument}`, {
+            const res = await apiClient.get<CandleData[]>(`${API_ENDPOINTS.CANDLES}/${selectedInstrument}`, {
                 params: { tf: selectedTimeframe }
             });
             return res.data || [];
@@ -51,10 +84,10 @@ export const ChartContainer: React.FC<ChartContainerProps> = ({ signals = [] }) 
     const { data: positions } = useQuery({
         queryKey: [QUERY_KEYS.POSITIONS],
         queryFn: async () => {
-            const res = await apiClient.get<{ items: any[] }>(API_ENDPOINTS.POSITIONS);
+            const res = await apiClient.get<{ items: Position[] }>(API_ENDPOINTS.POSITIONS);
             return res.data.items || [];
         },
-        initialData: []
+        initialData: [] as Position[]
     });
 
     // 2. Initialize Chart
@@ -66,7 +99,7 @@ export const ChartContainer: React.FC<ChartContainerProps> = ({ signals = [] }) 
 
         const chart = createChart(chartContainerRef.current, {
             layout: {
-                background: { type: 'solid' as any, color: COLORS.CHART_BG },
+                background: { type: ColorType.Solid, color: COLORS.CHART_BG },
                 textColor: COLORS.CHART_TEXT,
             },
             grid: {
@@ -86,7 +119,7 @@ export const ChartContainer: React.FC<ChartContainerProps> = ({ signals = [] }) 
                     return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
                 }
             },
-        }) as any;
+        });
 
         const candleSeries = chart.addSeries(CandlestickSeries, {
             upColor: COLORS.CANDLE_UP,
@@ -125,11 +158,11 @@ export const ChartContainer: React.FC<ChartContainerProps> = ({ signals = [] }) 
         if (historicalCandles.length === 0) {
             fetchHistory().then(res => {
                 if (res.data) {
-                    res.data.forEach((c: any) => addCandle(selectedInstrument, selectedTimeframe, c));
+                    res.data.forEach((c: CandleData) => addCandle(selectedInstrument, selectedTimeframe, c));
                 }
             });
         }
-    }, [selectedInstrument, selectedTimeframe]);
+    }, [selectedInstrument, selectedTimeframe, historicalCandles.length, fetchHistory, addCandle]);
 
 
     // 3. Set Data (from Store)
@@ -148,7 +181,7 @@ export const ChartContainer: React.FC<ChartContainerProps> = ({ signals = [] }) 
 
     // 4. Realtime Updates
     useEffect(() => {
-        const handleKline = (payload: any) => {
+        const handleKline: StreamEventHandler = (payload) => {
             // Payload: { type: 'kline', ts: ..., data: { instrument_id, tf, candle: {...} } }
             if (payload?.data?.candle && candleSeriesRef.current) {
                 const c = payload.data.candle;
@@ -181,7 +214,7 @@ export const ChartContainer: React.FC<ChartContainerProps> = ({ signals = [] }) 
 
         const unsubscribe = streamService.on(EVENTS.KLINE, handleKline);
         return () => unsubscribe();
-    }, [selectedInstrument, selectedTimeframe]);
+    }, [selectedInstrument, selectedTimeframe, addCandle, historicalCandles]);
 
     // 5. Signals Overlay
     useEffect(() => {
@@ -192,14 +225,14 @@ export const ChartContainer: React.FC<ChartContainerProps> = ({ signals = [] }) 
 
         const markers = activeSignals.map(sig => ({
             time: sig.ts as Time, // API now returns Seconds
-            position: (sig.side === 'BUY' ? 'belowBar' : 'aboveBar') as any, // BUY/SELL now
+            position: (sig.side === 'BUY' ? 'belowBar' : 'aboveBar') as SeriesMarkerPosition,
             color: sig.side === 'BUY' ? COLORS.LONG : COLORS.SHORT,
-            shape: (sig.side === 'BUY' ? 'arrowUp' : 'arrowDown') as any,
+            shape: (sig.side === 'BUY' ? 'arrowUp' : 'arrowDown') as SeriesMarkerShape,
             text: sig.side,
         }));
 
         if (markersPluginRef.current) {
-            markersPluginRef.current.setMarkers(markers);
+            markersPluginRef.current.setMarkers(markers as any);
         }
     }, [signals, selectedInstrument]);
 
@@ -208,16 +241,23 @@ export const ChartContainer: React.FC<ChartContainerProps> = ({ signals = [] }) 
         if (!candleSeriesRef.current || !positions) return;
 
         activeLinesRef.current.forEach(line => {
-            try { candleSeriesRef.current.removePriceLine(line); } catch (e) { }
+            try {
+                if (candleSeriesRef.current) {
+                    candleSeriesRef.current.removePriceLine(line);
+                }
+            } catch {
+                // Ignore removal errors
+            }
         });
         activeLinesRef.current = [];
 
         const position = positions.find(p => p.instrument_id === selectedInstrument);
 
         if (position) {
+            const entryPrice = position.avg_price ?? position.entry ?? 0;
             // Entry
             activeLinesRef.current.push(candleSeriesRef.current.createPriceLine({
-                price: position.avg_price || position.entry, // Contract says avg_price
+                price: entryPrice,
                 color: COLORS.ENTRY,
                 lineWidth: 2,
                 lineStyle: 0,

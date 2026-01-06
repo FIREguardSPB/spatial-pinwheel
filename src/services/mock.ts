@@ -116,6 +116,7 @@ export class MockStreamService {
             tp: this.generator.getPriceAt(now) * 1.02,
             size: 10,
             r: 2.0,
+            reason: 'Cyclic demo signal',
             status: 'pending_review',
             meta: { strategy: 'cyclic_demo' }
         };
@@ -130,7 +131,7 @@ export class MockStreamService {
     private emitStatus() {
         const status: BotStatus = {
             is_running: true,
-            mode: 'auto_paper',
+            mode: 'paper',
             is_paper: true,
             active_instrument_id: 'TQBR:SBER',
             connection: { market_data: 'connected', broker: 'connected' }
