@@ -1,8 +1,9 @@
-from fastapi import APIRouter
+from fastapi import Depends, APIRouter
 from typing import List
 from core.models.schemas import Candle
+from apps.api.deps import verify_token
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_token)])
 
 
 @router.get("/{ticker}", response_model=List[Candle])

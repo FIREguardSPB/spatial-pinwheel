@@ -31,6 +31,34 @@ class RiskSettings(BaseModel):
     w_levels: Optional[int] = 20
     w_costs: Optional[int] = 15
     w_liquidity: Optional[int] = 5
+    w_volume: Optional[int] = 10
+
+    # Strategy (P5-05)
+    strategy_name: Optional[str] = "breakout"
+
+    # AI settings (P4)
+    ai_mode: Optional[str] = "off"
+    ai_min_confidence: Optional[int] = 70
+    ai_primary_provider: Optional[str] = "claude"
+    ai_fallback_providers: Optional[str] = "ollama"
+    ollama_url: Optional[str] = "http://localhost:11434"
+
+    # Session (P5-03)
+    no_trade_opening_minutes: Optional[int] = 10
+    higher_timeframe: Optional[str] = "15m"
+
+    # Correlation (P5-06)
+    correlation_threshold: Optional[float] = 0.8
+    max_correlated_positions: Optional[int] = 2
+
+    # Telegram (P6-04)
+    telegram_bot_token: Optional[str] = ""
+    telegram_chat_id: Optional[str] = ""
+    notification_events: Optional[str] = "signal_created,trade_executed,sl_hit,tp_hit"
+
+    # Account
+    account_balance: Optional[float] = 100_000.0
+    trade_mode: Optional[str] = "review"
 
 
 # --- Signals ---

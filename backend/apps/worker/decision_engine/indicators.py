@@ -173,3 +173,107 @@ def calc_macd(
     final_hist = final_macd_line - final_signal_line
 
     return (round(final_macd_line, 6), round(final_signal_line, 6), round(final_hist, 6))
+
+
+# ─── P5-01: New indicators ────────────────────────────────────────────────────
+
+def calc_bollinger(
+    values: List[float], period: int = 20, std_dev: float = 2.0
+) -> Optional[tuple[float, float, float]]:
+    """
+    Bollinger Bands: (upper, middle, lower).
+    middle = SMA(period), upper/lower = middle ± std_dev * σ
+    """
+    if len(values) < period:
+        return None
+
+    window = values[-period:]
+    middle = sum(window) / period
+    variance = sum((x - middle) ** 2 for x in window) / period
+    sigma = variance ** 0.5
+
+    upper = middle + std_dev * sigma
+    lower = middle - std_dev * sigma
+    return (round(upper, 6), round(middle, 6), round(lower, 6))
+
+
+def calc_stochastic(
+    highs: List[float], lows: List[float], closes: List[float],
+    k_period: int = 14, d_period: int = 3
+) -> Optional[tuple[float, float]]:
+    """
+    Stochastic Oscillator: (%K, %D).
+    %K = (close - lowest_low) / (highest_high - lowest_low) * 100
+    %D = SMA(%K, d_period)
+    """
+    needed = k_period + d_period - 1
+    if len(closes) < needed:
+        return None
+
+    k_values: List[float] = []
+    for i in range(len(closes) - d_period + 1 - k_period + 1 + d_period - 1, len(closes) + 1):
+        if i < k_period:
+            continue
+        window_h = highs[i - k_period:i]
+        window_l = lows[i - k_period:i]
+        hh = max(window_h)
+        ll = min(window_l)
+        denom = hh - ll
+        if denom < 1e-9:
+            k_values.append(50.0)
+        else:
+            k_values.append((closes[i - 1] - ll) / denom * 100.0)
+
+    if len(k_values) < d_period:
+        # Simpler: just compute from the last k_period
+        window_h = highs[-k_period:]
+        window_l = lows[-k_period:]
+        hh = max(window_h)
+        ll = min(window_l)
+        denom = hh - ll
+        k = (closes[-1] - ll) / denom * 100.0 if denom > 1e-9 else 50.0
+        return (round(k, 2), round(k, 2))
+
+    d = sum(k_values[-d_period:]) / d_period
+    return (round(k_values[-1], 2), round(d, 2))
+
+
+def calc_vwap(
+    highs: List[float], lows: List[float], closes: List[float], volumes: List[float]
+) -> Optional[float]:
+    """
+    VWAP (Volume Weighted Average Price).
+    VWAP = Σ(typical_price * volume) / Σ(volume)
+    typical_price = (high + low + close) / 3
+    """
+    if not highs or not volumes:
+        return None
+
+    n = min(len(highs), len(lows), len(closes), len(volumes))
+    if n == 0:
+        return None
+
+    total_vol = sum(float(v) for v in volumes[:n])
+    if total_vol < 1e-9:
+        return None
+
+    tp_vol_sum = sum(
+        ((float(highs[i]) + float(lows[i]) + float(closes[i])) / 3.0) * float(volumes[i])
+        for i in range(n)
+    )
+    return round(tp_vol_sum / float(total_vol), 6)
+
+
+def calc_volume_ratio(volumes: List[float], period: int = 20) -> Optional[float]:
+    """
+    Volume ratio: current_volume / avg_volume(period).
+    > 1.0 = above average, < 1.0 = below average.
+    """
+    if len(volumes) < period + 1:
+        return None
+
+    avg = sum(volumes[-period - 1:-1]) / period
+    if avg < 1e-9:
+        return None
+
+    return round(volumes[-1] / avg, 3)

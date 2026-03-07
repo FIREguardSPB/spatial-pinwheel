@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 from core.storage.session import get_db
 from core.storage.repos import state as repo
 from core.models import schemas
+from apps.api.deps import verify_token
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_token)])
 
 
 @router.get("", response_model=schemas.LogList)

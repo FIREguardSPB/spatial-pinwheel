@@ -5,7 +5,18 @@ import random
 class MarketGenerator:
     def __init__(self, tickers: list[str]):
         self.tickers = tickers
-        self.prices = {t: 270.0 for t in tickers}  # Start price
+        # Realistic starting prices for common MOEX instruments
+        _default_prices = {
+            "TQBR:SBER": 270.0,
+            "TQBR:GAZP": 155.0,
+            "TQBR:LKOH": 7100.0,
+            "TQBR:YNDX": 3800.0,
+            "TQBR:ROSN": 530.0,
+            "TQBR:NVTK": 1100.0,
+            "TQBR:VTBR": 0.018,
+            "TQBR:MOEX": 220.0,
+        }
+        self.prices = {t: _default_prices.get(t, 270.0) for t in tickers}
         self.candles = {t: [] for t in tickers}
 
     def generate_tick(self) -> dict:

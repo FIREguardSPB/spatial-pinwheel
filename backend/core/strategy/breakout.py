@@ -1,69 +1,121 @@
-from typing import List, Optional
+from core.strategy.base import BaseStrategy
+"""
+P2-03: Breakout Strategy — добавлен SELL (Short) сигнал + реальный расчёт R/R.
+
+BUY  — пробой вверх: close > max(high[-lookback:-1])
+SELL — пробой вниз:  close < min(low[-lookback:-1])
+
+SL/TP рассчитываются через ATR(14) для более точного риска.
+R считается как (tp - entry) / (entry - sl) для BUY.
+"""
 import uuid
 import time
+import logging
+from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 
-class BreakoutStrategy:
+def _calc_atr(candles: list, period: int = 14) -> float:
+    """Простой ATR без библиотек."""
+    if len(candles) < period + 1:
+        # Fallback: среднее (high - low) за доступные свечи
+        ranges = [float(c["high"]) - float(c["low"]) for c in candles]
+        return sum(ranges) / len(ranges) if ranges else 0.0
+
+    true_ranges = []
+    for i in range(1, len(candles)):
+        high = float(candles[i]["high"])
+        low = float(candles[i]["low"])
+        prev_close = float(candles[i - 1]["close"])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(tr)
+
+    # Простое среднее последних period значений (SMA-ATR)
+    return sum(true_ranges[-period:]) / period
+
+
+class BreakoutStrategy(BaseStrategy):
+
     def __init__(self, lookback: int = 20):
-        self.lookback = lookback
+        self._lookback = lookback
+
+    @property
+    def name(self) -> str:
+        return "breakout"
+
+    @property
+    def lookback(self) -> int:
+        return self._lookback
 
     def analyze(self, instrument_id: str, candles: List[dict]) -> Optional[dict]:
         """
-        Analyzes candles (list of dicts or objects with close, high, low).
-        Returns dict matching Signal schema or None.
+        Анализирует историю свечей.
+        Возвращает dict сигнала или None.
         """
-        if len(candles) < self.lookback:
+        if len(candles) < self._lookback:
             return None
 
-        # Take last N candles excluding the current forming one usually?
-        # Or including? Let's assume candles[-1] is CLOSED candle passed by generator.
-        window = candles[-self.lookback :]
+        window = candles[-self._lookback:]
+        # Предыдущие N-1 свечей (без текущей)
+        prev = window[:-1]
+        current = window[-1]
 
-        highs = [c["high"] for c in window]
-        lows = [c["low"] for c in window]
-        current_close = window[-1]["close"]
+        range_high = max(float(c["high"]) for c in prev)
+        range_low  = min(float(c["low"])  for c in prev)
+        current_close = float(current["close"])
 
-        range_high = max(highs[:-1])  # Max of previous N-1
-        range_low = min(lows[:-1])
+        # ATR для расчёта SL/TP
+        atr = _calc_atr(candles[-20:], period=min(14, len(candles) - 1))
+        if atr < 1e-9:
+            atr = current_close * 0.005  # fallback 0.5%
 
-        # Simple Breakout Logic
         signal_side = None
         entry = current_close
         sl = 0.0
         tp = 0.0
 
-        # ATR-like volatility (approx range of last candle)
-        volatility = window[-1]["high"] - window[-1]["low"]
-        if volatility == 0:
-            volatility = current_close * 0.001
-
+        # ── BUY: пробой вверх ─────────────────────────────────────────────────
         if current_close > range_high:
             signal_side = "BUY"
-            sl = current_close - (volatility * 2.0)
-            tp = current_close + (volatility * 3.0)  # 1.5R
+            sl = current_close - atr * 2.0   # SL = 2×ATR ниже входа
+            tp = current_close + atr * 3.0   # TP = 3×ATR выше входа (R/R = 1.5)
+
+        # ── SELL: пробой вниз (P2-03 новая логика) ────────────────────────────
         elif current_close < range_low:
-            # Short logic (optional if we only want Longs for MVP simple stock bot?)
-            # TQBR usually allows shorts but requires margin. Let's support BUY only for safety?
-            # Or support both. Let's do BUY only for spec simplicity unless specified.
-            # Spec example shows "BUY". "Breakout above range".
-            pass
+            signal_side = "SELL"
+            sl = current_close + atr * 2.0   # SL = 2×ATR выше входа
+            tp = current_close - atr * 3.0   # TP = 3×ATR ниже входа (R/R = 1.5)
 
-        if signal_side:
-            # Generate ID
-            sig_id = f"sig_{uuid.uuid4().hex[:12]}"
-            return {
-                "id": sig_id,
-                "instrument_id": instrument_id,
-                "ts": int(time.time() * 1000),
-                "side": signal_side,
-                "entry": round(entry, 2),
-                "sl": round(sl, 2),
-                "tp": round(tp, 2),
-                "size": 10.0,  # Mock size
-                "r": 1.5,
-                "status": "pending_review",
-                "reason": f"Breakout ({self.lookback} bars)",
-                "meta": {"strategy": "breakout_v1"},
-            }
+        if not signal_side:
+            return None
 
-        return None
+        # ── P2-03: реальный расчёт R ──────────────────────────────────────────
+        sl_distance = abs(entry - sl)
+        tp_distance = abs(tp - entry)
+        r = round(tp_distance / sl_distance, 2) if sl_distance > 1e-9 else 1.5
+
+        logger.debug(
+            "BreakoutStrategy: %s %s entry=%.4f sl=%.4f tp=%.4f atr=%.4f R=%.2f",
+            instrument_id, signal_side, entry, sl, tp, atr, r,
+        )
+
+        return {
+            "id": f"sig_{uuid.uuid4().hex[:12]}",
+            "instrument_id": instrument_id,
+            "ts": int(time.time() * 1000),
+            "side": signal_side,
+            "entry": round(entry, 4),
+            "sl": round(sl, 4),
+            "tp": round(tp, 4),
+            "size": 10.0,  # placeholder — будет пересчитан через RiskManager.calculate_position_size в P2-04
+            "r": r,
+            "status": "pending_review",
+            "reason": f"Breakout {'above' if signal_side == 'BUY' else 'below'} {self._lookback}-bar range",
+            "meta": {
+                "strategy": "breakout_v2",
+                "atr": round(atr, 4),
+                "range_high": round(range_high, 4),
+                "range_low": round(range_low, 4),
+            },
+        }

@@ -16,6 +16,14 @@ dependencies = [
   "grpcio>=1.62.0",
   "protobuf>=4.25.0",
   "grpcio-tools>=1.62.0",
+  # P3-02: Structured logging
+  "structlog>=24.1.0",
+  # P3-06: Prometheus metrics
+  "prometheus-client>=0.20.0",
+  # P4-03/04/05: AI providers HTTP client
+  "httpx>=0.27.0",
+  # P8-02: Token encryption at rest (optional — plaintext fallback if missing)
+  "cryptography>=42.0.0",
 ]
 
 [build-system]
@@ -33,6 +41,7 @@ dev = [
   "mypy>=1.10.0",
   "pytest>=8.2.0",
   "pytest-asyncio>=0.23.7",
+  "hypothesis>=6.100.0",
   "httpx>=0.27.0",
 ]
 
@@ -47,4 +56,31 @@ exclude = ["vendor/*", "*_pb2.py", "*_pb2_grpc.py", "*_pb2.pyi"]
 
 [tool.mypy]
 python_version = "3.10"
-strict = false
+strict = true
+
+# Strict settings — enabled
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = false
+
+# Pragmatic exclusions: vendor code, protobuf, and third-party stubs
+[[tool.mypy.overrides]]
+module = [
+  "tinkoff.*",
+  "grpc.*",
+  "google.protobuf.*",
+  "redis.*",
+  "structlog.*",
+  "prometheus_client.*",
+  "sqlalchemy.*",
+]
+ignore_missing_imports = true
+ignore_errors = true
+
+# Generated proto files
+[[tool.mypy.overrides]]
+module = ["*_pb2", "*_pb2_grpc", "*_pb2_pyi"]
+ignore_errors = true

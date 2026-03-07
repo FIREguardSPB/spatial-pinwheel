@@ -1,309 +1,278 @@
+"""
+Worker — торговый цикл.
+
+P3-03: Рефакторинг монолита run_worker() → CandleAggregator + SignalProcessor + MarketPublisher
+P3-08: Graceful shutdown через SIGTERM/SIGINT
+P2-01: PositionMonitor на каждом тике
+P2-06: DB context manager
+P2-07: Session end close
+P2-08: AccountSnapshot
+P1-01: Полная история из aggregator.get_history()
+"""
 import asyncio
+import logging
 import orjson
-from decimal import Decimal
-from typing import Dict
-from core.events.bus import bus
-from core.storage.session import SessionLocal
-from core.strategy.breakout import BreakoutStrategy
-from core.execution.paper import PaperExecutionEngine
-from apps.worker.market import MarketGenerator
-from core.storage.models import DecisionLog
-from core.storage.repos import signals as signal_repo
-from apps.worker.decision_engine.engine import DecisionEngine
-from apps.worker.decision_engine.types import MarketSnapshot, Decision
-from collections import deque
-import uuid
-import time
 import os
+import signal
+import time
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from decimal import Decimal
+
+from core.config import settings as config
+from core.events.bus import bus
+from core.logging import configure_logging
+from core.metrics import record_tick, update_open_positions, update_pnl
+from core.storage.models import AccountSnapshot, Position, Settings
+from core.storage.session import SessionLocal
+from core.strategy.selector import StrategySelector
+from core.execution.paper import PaperExecutionEngine
+from core.execution.monitor import PositionMonitor
+from core.utils.session import should_close_before_session_end
+
+from apps.worker.ai.internet.collector import InternetCollector
+from apps.worker.aggregator import CandleAggregator
+from apps.worker.processor import SignalProcessor
+from apps.worker.publisher import MarketPublisher
+from apps.worker.market import MarketGenerator
+
+logger = logging.getLogger(__name__)
 
 
-async def run_worker():
-    print("Worker starting...")
-    tf_str = os.getenv("TF", "1m")
-    print(f"Worker Timeframe: {tf_str}")
-
-    # helper for frame seconds (standardized)
-    if tf_str == "1m":
-        frame_sec = 60
-    elif tf_str == "5m":
-        frame_sec = 5 * 60
-    elif tf_str == "15m":
-        frame_sec = 15 * 60
-    else:
-        frame_sec = 60  # default 1m
+# ── P2-06: DB context manager ─────────────────────────────────────────────────
+@asynccontextmanager
+async def get_db():
     db = SessionLocal()
+    try:
+        yield db
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
-    # Configuration
-    from core.config import settings
 
-    tickers = ["TQBR:SBER", "TQBR:GAZP", "TQBR:LKOH"]
+# ── P2-08: AccountSnapshot ────────────────────────────────────────────────────
+async def _save_snapshot(balance: float, open_pos: int, day_pnl: float) -> None:
+    async with get_db() as db:
+        db.add(AccountSnapshot(
+            ts=int(time.time() * 1000),
+            balance=balance,
+            equity=balance + day_pnl,
+            open_positions=open_pos,
+            day_pnl=day_pnl,
+        ))
+        db.commit()
 
-    # Components
-    strategy = BreakoutStrategy(lookback=5)
-    execution = PaperExecutionEngine(db)
-    decision_engine = DecisionEngine(settings)
 
-    # State for Aggregation (OHLCV Builder)
-    # Map: ticker -> current_15m_candle (dict)
-    current_candles: Dict[str, dict] = {}
-    last_sent_time: Dict[str, float] = {}  # For throttling
+# ── P3-08: Graceful shutdown flag ─────────────────────────────────────────────
+_shutdown = asyncio.Event()
 
-    # History Buffer for Decision Engine (Need ~200 candles)
-    # History Buffer for Decision Engine (Need ~200 candles)
-    # Map: ticker -> deque of completed candles
-    history: Dict[str, deque] = {t: deque(maxlen=200) for t in tickers}
+def _handle_signal(sig_name: str) -> None:
+    logger.warning("Received %s — initiating graceful shutdown...", sig_name)
+    _shutdown.set()
 
-    # Adapter / Generator
-    market_stream = None
-    if settings.BROKER_PROVIDER == "tbank" and settings.TBANK_TOKEN:
-        print(f"Using T-Bank Adapter (gRPC) [Sandbox={settings.TBANK_SANDBOX}]...")
+
+async def run_worker() -> None:
+    configure_logging(
+        level=os.getenv("LOG_LEVEL", "INFO"),
+        json_format=(config.APP_ENV == "production"),
+    )
+    logger.info("Worker starting (env=%s tf=%s broker=%s)",
+                config.APP_ENV, os.getenv("TF", "1m"), config.BROKER_PROVIDER)
+
+    # P3-08: register POSIX signal handlers
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda s=sig: _handle_signal(s.name))
+
+    tf_str = os.getenv("TF", "1m")
+    frame_sec = {"1m": 60, "5m": 300, "15m": 900}.get(tf_str, 60)
+
+    # P6-09: load active instruments from watchlist table
+    _default_tickers = ["TQBR:SBER", "TQBR:GAZP", "TQBR:LKOH"]
+    with SessionLocal() as _wl_db:
+        from core.storage.models import Watchlist
+        _active = _wl_db.query(Watchlist.instrument_id).filter(Watchlist.is_active == True).all()  # noqa: E712
+        tickers = [row[0] for row in _active] if _active else _default_tickers
+    if not tickers:
+        tickers = _default_tickers
+    logger.info("Watchlist loaded: %d instrument(s): %s", len(tickers), tickers)
+
+    # ── Components ─────────────────────────────────────────────────────────────
+    # P5-05: Read strategy from Settings (hot-swappable)
+    selector = StrategySelector()
+    with SessionLocal() as _init_db:
+        _s = _init_db.query(Settings).first()
+        _strategy_name = getattr(_s, 'strategy_name', 'breakout') if _s else 'breakout'
+    strategy = selector.get(_strategy_name)
+    aggregator = CandleAggregator(frame_sec=frame_sec)
+    publisher = MarketPublisher(tf_str=tf_str)
+    # P4-02/08: InternetCollector with Redis caching
+    internet = InternetCollector(
+        redis_client=bus.redis,
+        news_ttl=config.NEWS_CACHE_TTL_SEC,
+        macro_ttl=config.MACRO_CACHE_TTL_SEC,
+    )
+    processor = SignalProcessor(strategy=strategy, internet_collector=internet, aggregator=aggregator)
+    monitors: dict[str, PositionMonitor] = {}
+
+    # ── Market stream ──────────────────────────────────────────────────────────
+    if config.BROKER_PROVIDER == "tbank" and config.TBANK_TOKEN:
         from apps.broker.tbank import TBankGrpcAdapter
-
         adapter = TBankGrpcAdapter(
-            token=settings.TBANK_TOKEN,
-            account_id=settings.TBANK_ACCOUNT_ID,
-            sandbox=settings.TBANK_SANDBOX,
+            token=config.TBANK_TOKEN,
+            account_id=config.TBANK_ACCOUNT_ID,
+            sandbox=config.TBANK_SANDBOX,
         )
-
-        # NOTE: For v1 we skip pre-filling history to avoid startup delay/complexity,
-        # but DecisionEngine will REJECT first ~50 signals until history builds up.
-
         market_stream = adapter.stream_marketdata(tickers)
     else:
-        print("Using Mock Market Generator...")
         market = MarketGenerator(tickers=tickers)
 
-        # Wrap mock in an async generator to unify interface
         async def mock_stream():
-            while True:
-                updates = market.generate_tick()
-                for t, c in updates.items():
-                    # Mock produces 'completed' candles, but we treat them as stream updates
+            while not _shutdown.is_set():
+                for t, c in market.generate_tick().items():
                     yield {
-                        "instrument_id": t,
-                        "broker_id": None,
-                        "time": c[
-                            "time"
-                        ],  # MS in Mock? Need to check. Assuming MS from old code match
-                        "open": Decimal(str(c["open"])),
-                        "high": Decimal(str(c["high"])),
-                        "low": Decimal(str(c["low"])),
-                        "close": Decimal(str(c["close"])),
-                        "volume": c["volume"],
-                        "is_complete": False,  # Continuous updates
+                        "instrument_id": t, "broker_id": None,
+                        "time": c["time"],
+                        "open": Decimal(str(c["open"])), "high": Decimal(str(c["high"])),
+                        "low": Decimal(str(c["low"])), "close": Decimal(str(c["close"])),
+                        "volume": c["volume"], "is_complete": False,
                     }
                 await asyncio.sleep(1.0)
 
         market_stream = mock_stream()
 
-    # Redis Command Subscriber
     cmd_pubsub = bus.redis.pubsub()
     await cmd_pubsub.subscribe("cmd:execute_signal")
+    command_task = asyncio.create_task(_command_listener(cmd_pubsub))
 
-    # Process Loop
-    print("Worker running loops...")
-    last_signal_check = 0
-    signal_interval = 60  # Check signals every 1m? Or on every tick?
-    # Strategy usually runs on close.
-    # We check on every tick if candle closed?
+    last_signal_check: dict[str, float] = {t: 0.0 for t in tickers}
+    last_snapshot_ts = 0.0
+    signal_interval = 60.0
+    snapshot_interval = 300.0
 
-    # We need a robust loop. For MVP:
-    # We iterate properly async
-    command_task = asyncio.create_task(command_listener(cmd_pubsub, execution))
-    print("Command listener started")
+    logger.info("Worker running. Instruments: %s", tickers)
 
     try:
         async for tick in market_stream:
-            # tick is a dict: { instrument_id, ts, open, high, low, close, volume } (Decimals)
+            if _shutdown.is_set():
+                break
+
             ticker = tick["instrument_id"]
+            record_tick(ticker)
 
-            # --- OHLCV Aggregation (1m/Tick -> 15m) ---
-            # Standardize Time: If tick time > 3000000000 (likely MS), convert to Seconds?
-            # Unix Sec now ~1.7e9. MS ~1.7e12.
-            tick_time = tick["time"]
-            if tick_time > 10000000000:
-                tick_time = int(tick_time / 1000)
+            # ── Candle aggregation ─────────────────────────────────────────────
+            candle, _ = aggregator.on_tick(tick)
+            await publisher.publish_candle(candle)
 
-            # 1. Determine start of candle for this tick
-            current_frame_start = (tick_time // frame_sec) * frame_sec
+            current_price = candle.close
+            now = asyncio.get_running_loop().time()
 
-            # 2. Get or Initialize current candle
-            candle = current_candles.get(ticker)
+            # ── P2-01: Position Monitor ────────────────────────────────────────
+            async with get_db() as db:
+                s = db.query(Settings).first()
+                time_stop = int(s.time_stop_bars) if s and s.time_stop_bars else 0
+                close_before = int(s.close_before_session_end_minutes) if s and s.close_before_session_end_minutes else 0
 
-            if not candle or candle["time"] != current_frame_start:
-                # New bar started
-                if candle:
-                    # Finalize previous candle
-                    # Add to history
-                    history[ticker].append(
-                        {
-                            "time": candle["time"],
-                            "open": candle["open"],
-                            "high": candle["high"],
-                            "low": candle["low"],
-                            "close": candle["close"],
-                            "volume": candle["volume"],
-                        }
+                if ticker not in monitors:
+                    monitors[ticker] = PositionMonitor(db)
+                else:
+                    monitors[ticker].db = db
+
+                await monitors[ticker].on_tick(ticker, current_price, time_stop)
+
+                # P2-07: Session end
+                if should_close_before_session_end(close_before):
+                    await monitors[ticker].close_for_session_end(ticker, current_price)
+
+            # ── P2-08: Snapshot ────────────────────────────────────────────────
+            if now - last_snapshot_ts > snapshot_interval:
+                last_snapshot_ts = now
+                async with get_db() as db:
+                    open_pos = db.query(Position).filter(Position.qty > 0).count()
+                    # Read real balance from Settings
+                    _snap_settings = db.query(Settings).first()
+                    _snap_balance = float(getattr(_snap_settings, 'account_balance', 100_000) or 100_000)
+                    # Calculate day PnL: sum of realized_pnl updated today + unrealized
+                    from sqlalchemy import func
+                    _sod = int(datetime.now(timezone.utc).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    ).timestamp() * 1000)
+                    _realized_today = float(
+                        db.query(func.sum(Position.realized_pnl))
+                        .filter(Position.updated_ts >= _sod).scalar() or 0.0
                     )
+                    _unrealized = float(
+                        db.query(func.sum(Position.unrealized_pnl))
+                        .filter(Position.qty > 0).scalar() or 0.0
+                    )
+                    _day_pnl = _realized_today + _unrealized
+                update_open_positions(open_pos)
+                await _save_snapshot(_snap_balance, open_pos, _day_pnl)
 
-                candle = {
-                    "instrument_id": ticker,
-                    "time": current_frame_start,
-                    "open": tick["open"],
-                    "high": tick["high"],
-                    "low": tick["low"],
-                    "close": tick["close"],
-                    "volume": tick["volume"],
-                    "is_complete": False,
-                }
-            else:
-                # Update existing bar
-                candle["high"] = max(candle["high"], tick["high"])
-                candle["low"] = min(candle["low"], tick["low"])
-                candle["close"] = tick["close"]
-                candle["volume"] += tick["volume"]  # Accumulate volume
+            # ── Signal cycle ───────────────────────────────────────────────────
+            if now - last_signal_check.get(ticker, 0) < signal_interval:
+                continue
+            last_signal_check[ticker] = now
 
-            current_candles[ticker] = candle
+            async with get_db() as db:
+                # P5-05: Hot-swap strategy if changed in Settings
+                _cur_settings = db.query(Settings).first()
+                _new_strategy_name = getattr(_cur_settings, 'strategy_name', 'breakout') if _cur_settings else 'breakout'
+                _new_strategy = selector.get(_new_strategy_name)
+                if processor.strategy.name != _new_strategy.name:
+                    logger.info("Strategy hot-swapped: %s → %s", processor.strategy.name, _new_strategy.name)
+                    processor.strategy = _new_strategy
 
-            # --- Throttling (1s) ---
-            now_ts = asyncio.get_event_loop().time()
-            last_ts = last_sent_time.get(ticker, 0)
-
-            if now_ts - last_ts > 1.0:
-                payload = {
-                    "instrument_id": ticker,
-                    "tf": tf_str,
-                    "candle": {
-                        "time": candle["time"],
-                        "open": float(candle["open"]),
-                        "high": float(candle["high"]),
-                        "low": float(candle["low"]),
-                        "close": float(candle["close"]),
-                        "volume": int(candle["volume"]),
-                    },
-                }
-                await bus.publish("kline", payload)
-                last_sent_time[ticker] = now_ts
-
-            # --- Strategy & Decision Check ---
-            if now_ts - last_signal_check > signal_interval:
-                last_signal_check = now_ts
-
-                # Check Strategy
-                # Use current candle as "latest"
-                simulated_history = [
-                    {
-                        "time": candle["time"],
-                        "open": float(candle["open"]),
-                        "high": float(candle["high"]),
-                        "low": float(candle["low"]),
-                        "close": float(candle["close"]),
-                        "volume": int(candle["volume"]),
-                    }
-                ]
-
-                sig_data = strategy.analyze(ticker, simulated_history)
-
-                if sig_data:
-                    pending_count = signal_repo.count_pending_signals(db, ticker)
-                    if pending_count == 0:
-                        try:
-                            # 1. Create Signal (Pending Review)
-                            # Persist Signal first
-                            signal_orm = signal_repo.create_signal(db, sig_data)
-
-                            # 2. Decision Engine Evaluate
-                            # Construct Snapshot
-                            # Use History + Current Candle
-                            snapshot_candles = list(history[ticker])
-                            # Add current partial candle for up-to-date analysis
-                            snapshot_candles.append(
-                                {
-                                    "time": candle["time"],
-                                    "open": candle["open"],
-                                    "high": candle["high"],
-                                    "low": candle["low"],
-                                    "close": candle["close"],
-                                    "volume": candle["volume"],
-                                }
-                            )
-
-                            snapshot = MarketSnapshot(
-                                candles=snapshot_candles, last_price=candle["close"]
-                            )
-
-                            evaluation = decision_engine.evaluate(signal_orm, snapshot)
-
-                            # 3. Update Signal with Decision
-                            meta = dict(signal_orm.meta) if signal_orm.meta else {}
-                            meta["decision"] = evaluation.model_dump(mode="json")
-                            signal_orm.meta = meta
-                            db.commit()
-
-                            # 4. Log Decision
-                            log_entry = DecisionLog(
-                                id=str(uuid.uuid4()),
-                                ts=int(time.time()),  # Seconds
-                                type="decision_engine",
-                                message=f"{evaluation.decision.value} {ticker} {sig_data['meta'].get('strategy', 'unknown')}",
-                                payload=evaluation.model_dump(mode="json"),
-                            )
-                            db.add(log_entry)
-                            db.commit()
-
-                            # 5. Notify UI
-                            await bus.publish(
-                                "signal_updated",
-                                {"id": signal_orm.id, "status": signal_orm.status, "meta": meta},
-                            )
-                            print(
-                                f"Signal Evaluated: {ticker} -> {evaluation.decision.value} (Score {evaluation.score})"
-                            )
-
-                            # 6. Auto Execution Checks
-                            trade_mode = getattr(settings, "trade_mode", "review")
-                            # If TAKE and Auto Paper/Live
-                            if evaluation.decision == Decision.TAKE:
-                                if trade_mode == "auto_paper":
-                                    print(f"Auto-Executing {signal_orm.id} (PAPER)")
-                                    # Approve
-                                    signal_repo.update_signal_status(db, signal_orm.id, "approved")
-                                    # Execute
-                                    await execution.execute_approved_signal(signal_orm.id)
-
-                        except Exception as e:
-                            print(f"Error processing signal/decision: {e}")
-                            import traceback
-
-                            traceback.print_exc()
+                history = aggregator.get_history(ticker)
+                await processor.process(ticker, history, db)
 
     except Exception as e:
-        print(f"Worker Loop Error: {e}")
-        import traceback
-
-        traceback.print_exc()
-
+        logger.error("Worker loop error: %s", e, exc_info=True)
     finally:
         command_task.cancel()
-        db.close()
+        await _shutdown_cleanup(monitors)
 
 
-async def command_listener(pubsub, execution):
-    print("Command listener started")
-    while True:
+async def _shutdown_cleanup(monitors: dict) -> None:
+    """P3-08: Log open positions and close resources."""
+    async with get_db() as db:
+        open_pos = db.query(Position).filter(Position.qty > 0).all()
+        count = len(open_pos)
+        if count:
+            instruments = [p.instrument_id for p in open_pos]
+            logger.warning(
+                "Worker shutdown: %d open position(s) remain: %s — NOT auto-closed",
+                count, instruments,
+            )
+        else:
+            logger.info("Worker shutdown gracefully. No open positions.")
+
+    try:
+        await bus.redis.aclose()
+    except Exception:
+        pass
+
+
+async def _command_listener(pubsub) -> None:
+    logger.info("Command listener ready")
+    while not _shutdown.is_set():
         try:
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if msg:
                 data = orjson.loads(msg["data"])
                 sig_id = data.get("signal_id")
-                print(f"Received Execution Command for {sig_id}")
                 if sig_id:
-                    await execution.execute_approved_signal(sig_id)
+                    logger.info("Execute command: signal_id=%s", sig_id)
+                    async with get_db() as db:
+                        await PaperExecutionEngine(db).execute_approved_signal(sig_id)
             await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"Command Error: {e}")
+            logger.error("Command listener error: %s", e)
             await asyncio.sleep(1.0)
 
 

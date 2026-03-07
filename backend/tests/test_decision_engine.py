@@ -193,5 +193,58 @@ class TestDecisionEngine(unittest.TestCase):
         self.assertEqual(s, 20)  # Not 40
 
 
+
+    # ── P5-01: New indicator tests ──────────────────────────────────────────────
+
+    def test_bollinger_bands_basic(self):
+        closes = [float(100 + (i % 5)) for i in range(30)]
+        bb = indicators.calc_bollinger(closes, period=20)
+        self.assertIsNotNone(bb)
+        upper, middle, lower = bb
+        self.assertGreater(upper, middle)
+        self.assertGreater(middle, lower)
+
+    def test_stochastic_range(self):
+        import random; random.seed(1)
+        closes = [100 + random.uniform(-3, 3) for _ in range(30)]
+        highs  = [c + 1 for c in closes]
+        lows   = [c - 1 for c in closes]
+        result = indicators.calc_stochastic(highs, lows, closes)
+        self.assertIsNotNone(result)
+        k, d = result
+        self.assertGreaterEqual(k, 0); self.assertLessEqual(k, 100)
+
+    def test_volume_ratio_constant(self):
+        vols = [100.0] * 25
+        ratio = indicators.calc_volume_ratio(vols, period=20)
+        self.assertAlmostEqual(ratio, 1.0, places=3)
+
+    def test_vwap_equal_volume(self):
+        closes = [10.0, 20.0, 30.0]
+        highs  = [11.0, 21.0, 31.0]
+        lows   = [ 9.0, 19.0, 29.0]
+        vols   = [100.0] * 3
+        vwap = indicators.calc_vwap(highs, lows, closes, vols)
+        expected = sum((h+l+c)/3 for h,l,c in zip(highs,lows,closes)) / 3
+        self.assertAlmostEqual(vwap, expected, places=4)
+
+    # ── P5-02: Volume score test ────────────────────────────────────────────────
+
+    def test_volume_score_block_on_low_volume(self):
+        score, reason = rules.score_volume(0.2, max_score=10)
+        self.assertEqual(score, 0)
+        from apps.worker.decision_engine.types import Severity
+        self.assertEqual(reason.severity, Severity.BLOCK)
+
+    # ── P5-04: HTF alignment ────────────────────────────────────────────────────
+
+    def test_htf_alignment_buy_uptrend_full(self):
+        score, reason = rules.score_htf_alignment("BUY", "up", max_score=5)
+        self.assertEqual(score, 5)
+
+    def test_htf_alignment_conflict_zero(self):
+        score, reason = rules.score_htf_alignment("BUY", "down", max_score=5)
+        self.assertEqual(score, 0)
+
 if __name__ == "__main__":
     unittest.main()

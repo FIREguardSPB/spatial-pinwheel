@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:ui": "vitest --ui",
+    "test:cov": "vitest run --coverage",
+    "install:test": "npm install --save-dev vitest@\"^1.6.0\" @vitest/coverage-v8@\"^1.6.0\" @testing-library/react@\"^16.0.0\" @testing-library/user-event@\"^14.5.2\" msw@\"^2.3.0\" jsdom@\"^24.1.0\" @testing-library/jest-dom@\"^6.4.6\""
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.16",

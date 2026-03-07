@@ -56,6 +56,44 @@ def update_settings(db: Session, update_data: schemas.RiskSettings) -> Settings:
         settings.w_costs = update_data.w_costs
     if update_data.w_liquidity is not None:
         settings.w_liquidity = update_data.w_liquidity
+    if getattr(update_data, 'w_volume', None) is not None:
+        settings.w_volume = update_data.w_volume
+
+    # Strategy
+    if getattr(update_data, 'strategy_name', None) is not None:
+        settings.strategy_name = update_data.strategy_name
+
+    # AI settings
+    if getattr(update_data, 'ai_mode', None) is not None:
+        settings.ai_mode = update_data.ai_mode
+    if getattr(update_data, 'ai_min_confidence', None) is not None:
+        settings.ai_min_confidence = update_data.ai_min_confidence
+
+    # Session (P5-03)
+    if getattr(update_data, 'no_trade_opening_minutes', None) is not None:
+        settings.no_trade_opening_minutes = update_data.no_trade_opening_minutes
+    if getattr(update_data, 'higher_timeframe', None) is not None:
+        settings.higher_timeframe = update_data.higher_timeframe
+
+    # Correlation (P5-06)
+    if getattr(update_data, 'correlation_threshold', None) is not None:
+        settings.correlation_threshold = update_data.correlation_threshold
+    if getattr(update_data, 'max_correlated_positions', None) is not None:
+        settings.max_correlated_positions = update_data.max_correlated_positions
+
+    # Telegram
+    if getattr(update_data, 'telegram_bot_token', None) is not None:
+        settings.telegram_bot_token = update_data.telegram_bot_token
+    if getattr(update_data, 'telegram_chat_id', None) is not None:
+        settings.telegram_chat_id = update_data.telegram_chat_id
+    if getattr(update_data, 'notification_events', None) is not None:
+        settings.notification_events = update_data.notification_events
+
+    # Account
+    if getattr(update_data, 'account_balance', None) is not None:
+        settings.account_balance = update_data.account_balance
+    if getattr(update_data, 'trade_mode', None) is not None:
+        settings.trade_mode = update_data.trade_mode
 
     db.commit()
     db.refresh(settings)

@@ -96,7 +96,7 @@ case "$ACTION" in
         echo -e "${GREEN}>>> Waiting for API to be ready...${NC}"
         # Wait for API healthcheck
         for i in {1..30}; do
-            if curl -sf http://localhost:${API_PORT:-3000}/api/v1/health > /dev/null 2>&1; then
+            if curl -sf http://localhost:${APP_PORT:-8000}/api/v1/health > /dev/null 2>&1; then
                 echo -e "${GREEN}API ready!${NC}"
                 break
             fi
@@ -114,7 +114,7 @@ case "$ACTION" in
         
         echo -e "\n${GREEN}========================================${NC}"
         echo -e "${GREEN}Endpoints:${NC}"
-        echo -e "  API:      http://localhost:${API_PORT:-3000}/api/v1/health"
+        echo -e "  API:      http://localhost:${APP_PORT:-8000}/api/v1/health"
         if [[ "$PROFILE" == "prod" ]]; then
             echo -e "  Frontend: http://localhost:${FRONTEND_PORT:-80}"
         fi
@@ -142,7 +142,7 @@ case "$ACTION" in
         $COMPOSE_CMD ps
         echo ""
         echo -e "${BLUE}>>> Health Check:${NC}"
-        curl -s http://localhost:${API_PORT:-3000}/api/v1/health | python -m json.tool 2>/dev/null || echo "API not responding"
+        curl -s http://localhost:${APP_PORT:-8000}/api/v1/health | python -m json.tool 2>/dev/null || echo "API not responding"
         ;;
         
     migrate)
@@ -208,7 +208,7 @@ case "$ACTION" in
         
         echo -e "${GREEN}>>> Waiting for API to be ready...${NC}"
         for i in {1..30}; do
-            if curl -sf http://localhost:${API_PORT:-3000}/api/v1/health > /dev/null 2>&1; then
+            if curl -sf http://localhost:${APP_PORT:-8000}/api/v1/health > /dev/null 2>&1; then
                 echo -e "${GREEN}API ready!${NC}"
                 break
             fi
@@ -226,7 +226,7 @@ case "$ACTION" in
         
         # Show health
         echo -e "\n${BLUE}>>> Health Check:${NC}"
-        curl -s http://localhost:${API_PORT:-3000}/api/v1/health | python -m json.tool 2>/dev/null || echo "API not responding"
+        curl -s http://localhost:${APP_PORT:-8000}/api/v1/health | python -m json.tool 2>/dev/null || echo "API not responding"
         ;;
         
     *)

@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useBotStatus, useBotControl, useSettings, useUpdateSettings } from './hooks';
+import { apiClient } from '../../services/api';
 import type { RiskSettings } from '../../types';
-import { Play, Square, Shield, Save, AlertCircle } from 'lucide-react';
+import { Play, Square, Shield, Save, AlertCircle, Brain, MessageCircle, Bell, ExternalLink, Link } from 'lucide-react';
+import { toast } from 'sonner';
+import { ConfirmModal } from '../../components/ui/UIComponents';
+import { AISettingsPanel } from './AISettingsPanel';
 import clsx from 'clsx';
 import { useAppStore } from '../../store';
 
@@ -14,12 +18,54 @@ export default function SettingsPage() {
 
     const [formState, setFormState] = useState<RiskSettings | null>(null);
 
+    // P6-04: Telegram notification settings
+    const [tgToken,    setTgToken]    = useState('');
+    const [tgChatId,   setTgChatId]   = useState('');
+    const [tgEvents,   setTgEvents]   = useState('signal_created,trade_executed,sl_hit,tp_hit');
+    const [tgTesting,  setTgTesting]  = useState(false);
+    const [tgSaved,    setTgSaved]    = useState(false);
+
+    const saveTelegram = async () => {
+        try {
+            // Save both tokens via the token management API
+            if (tgToken)  await apiClient.post('/tokens', { key_name: 'TELEGRAM_BOT_TOKEN', value: tgToken,  label: 'Telegram Bot Token', category: 'telegram' });
+            if (tgChatId) await apiClient.post('/tokens', { key_name: 'TELEGRAM_CHAT_ID',   value: tgChatId, label: 'Telegram Chat ID',   category: 'telegram' });
+            // Also save events to settings
+            if (formState) {
+                const updated = { ...formState, notification_events: tgEvents } as any;
+                updateSettings(updated);
+            }
+            setTgSaved(true);
+            toast.success('Telegram настроен');
+            setTimeout(() => setTgSaved(false), 3000);
+        } catch { toast.error('Ошибка сохранения Telegram'); }
+    };
+
+    const testTelegram = async () => {
+        setTgTesting(true);
+        try {
+            const token = tgToken || (await apiClient.get('/tokens').then(r => (r.data as any[]).find((t:any) => t.key_name === 'TELEGRAM_BOT_TOKEN')?.masked_value));
+            if (!token) { toast.error('Сначала задайте Bot Token'); return; }
+            // find token id
+            const tokens = (await apiClient.get('/tokens')).data as any[];
+            const tok = tokens.find((t:any) => t.key_name === 'TELEGRAM_BOT_TOKEN');
+            if (tok) {
+                const res = await apiClient.post(`/tokens/test/${tok.id}`);
+                toast[res.data.ok ? 'success' : 'error'](res.data.message);
+            } else {
+                toast.error('Токен не найден в БД');
+            }
+        } catch { toast.error('Ошибка теста'); }
+        finally { setTgTesting(false); }
+    };
+
     useEffect(() => {
         if (settings) setFormState(settings);
     }, [settings]);
 
     const { isMockMode, setMockMode, authToken, setAuthToken } = useAppStore();
     const [localToken, setLocalToken] = useState(authToken || '');
+    const [confirmAction, setConfirmAction] = useState<null | 'start' | 'stop'>(null);
 
     const handleApplyPreset = (profile: RiskSettings['risk_profile']) => {
         if (!formState) return;
@@ -70,19 +116,21 @@ export default function SettingsPage() {
     };
 
     const handleSave = () => {
-        if (formState) updateSettings(formState);
+        if (formState) updateSettings(formState, {
+            onSuccess: () => toast.success('✅ Настройки сохранены'),
+            onError:   () => toast.error('Ошибка сохранения настроек'),
+        });
     };
 
     const confirmAndToggleBot = () => {
         const action = status?.is_running ? 'stop' : 'start';
-        if (confirm(`Are you sure you want to ${action.toUpperCase()} the bot?`)) {
-            controlBot(action);
-        }
+        setConfirmAction(action);
     };
 
     if (!formState) return <div className="p-8">Loading settings...</div>;
 
     return (
+        <>
         <div className="p-6 max-w-4xl mx-auto">
             <h1 className="text-3xl font-bold mb-8 text-gray-100 flex items-center">
                 <Shield className="mr-3 text-blue-500" /> System Settings
@@ -283,12 +331,103 @@ export default function SettingsPage() {
                 </button>
             </div>
 
+
+            {/* ── AI Configuration ─────────────────────────────────────── */}
+            <section className="bg-gray-900 border border-gray-800 rounded-lg p-6">
+                <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+                    <Brain className="w-5 h-5 text-blue-400" /> AI-ассистент
+                </h2>
+                <AISettingsPanel
+                    settings={formState}
+                    onUpdate={(patch: any) => setFormState(prev => prev ? ({ ...prev, ...patch }) : prev)}
+                />
+            </section>
+
+            {/* ── P6-04: Telegram уведомления ────────────────────────────── */}
+            <section className="bg-gray-900 border border-gray-800 rounded-lg p-6">
+                <h2 className="text-lg font-bold mb-1 flex items-center gap-2">
+                    <MessageCircle className="w-5 h-5 text-sky-400" /> Telegram уведомления
+                </h2>
+                <p className="text-xs text-gray-500 mb-4">
+                    Бот будет отправлять сообщения о сигналах и сделках в указанный чат.&nbsp;
+                    <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer"
+                       className="text-sky-400 hover:underline inline-flex items-center gap-1">
+                        Создать бота в @BotFather <ExternalLink className="w-3 h-3" />
+                    </a>
+                </p>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">Bot Token</label>
+                        <input
+                            type="password"
+                            value={tgToken}
+                            onChange={e => setTgToken(e.target.value)}
+                            placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz (или оставьте пустым)"
+                            className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-sky-500"
+                        />
+                        <p className="text-xs text-gray-600 mt-1">Уже задан через страницу Токены? Оставьте поле пустым.</p>
+                    </div>
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">Chat ID</label>
+                        <input
+                            type="text"
+                            value={tgChatId}
+                            onChange={e => setTgChatId(e.target.value)}
+                            placeholder="-100123456789"
+                            className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-sky-500"
+                        />
+                        <p className="text-xs text-gray-600 mt-1">Личный чат или канал. Узнать ID: перешли сообщение боту @userinfobot</p>
+                    </div>
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-2 flex items-center gap-1">
+                            <Bell className="w-3.5 h-3.5" /> Уведомлять о событиях
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                            {[
+                                { key: 'signal_created',  label: 'Новый сигнал' },
+                                { key: 'trade_executed',  label: 'Сделка' },
+                                { key: 'sl_hit',          label: 'Стоп-лосс' },
+                                { key: 'tp_hit',          label: 'Тейк-профит' },
+                                { key: 'daily_loss_limit',label: 'Дневной лимит' },
+                            ].map(({ key, label }) => {
+                                const active = tgEvents.split(',').includes(key);
+                                return (
+                                    <button key={key}
+                                        onClick={() => {
+                                            const parts = tgEvents.split(',').filter(Boolean);
+                                            setTgEvents(active
+                                                ? parts.filter(p => p !== key).join(',')
+                                                : [...parts, key].join(','));
+                                        }}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${active ? 'bg-sky-700 text-sky-100' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}>
+                                        {label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    <div className="flex gap-3">
+                        <button onClick={testTelegram} disabled={tgTesting}
+                            className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors disabled:opacity-50 flex items-center gap-2">
+                            {tgTesting ? <span className="animate-spin">⟳</span> : '🔔'} Тест
+                        </button>
+                        <button onClick={saveTelegram}
+                            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 ${tgSaved ? 'bg-emerald-600 text-white' : 'bg-sky-600 hover:bg-sky-500 text-white'}`}>
+                            {tgSaved ? '✓ Сохранено' : <><Save className="w-4 h-4" /> Сохранить</>}
+                        </button>
+                        <a href="/tokens" className="ml-auto px-3 py-2 text-xs text-sky-400 hover:underline flex items-center gap-1">
+                            <Link className="w-3 h-3" /> Все токены
+                        </a>
+                    </div>
+                </div>
+            </section>
+
             <section className="bg-gray-900 border border-gray-800 rounded-lg p-6 opacity-80 hover:opacity-100 transition-opacity">
                 <h2 className="text-lg font-bold mb-4 text-gray-400 flex items-center">
                     <AlertCircle className="w-4 h-4 mr-2" /> Developer / Connectivity
                 </h2>
                 <div className="mb-4 text-xs font-mono text-gray-600 bg-gray-950 p-2 rounded border border-gray-800">
-                    API_BASE: {import.meta.env.VITE_API_URL || '/api'}
+                    API_BASE: {import.meta.env.VITE_API_URL || '/api/v1'}
                 </div>
                 <div className="space-y-4">
                     <div className="flex items-center justify-between">
@@ -336,5 +475,25 @@ export default function SettingsPage() {
                 </div>
             </section>
         </div>
+
+            {confirmAction && (
+                <ConfirmModal
+                    title={confirmAction === 'start' ? '🚀 Запустить бота?' : '⛔ Остановить бота?'}
+                    description={confirmAction === 'start'
+                        ? 'Бот начнёт анализировать рынок и генерировать сигналы.'
+                        : 'Все текущие операции будут приостановлены. Открытые позиции сохранятся.'}
+                    confirmLabel={confirmAction === 'start' ? 'Запустить' : 'Остановить'}
+                    variant={confirmAction === 'stop' ? 'danger' : 'default'}
+                    onConfirm={() => {
+                        controlBot(confirmAction, {
+                            onSuccess: () => toast.success(confirmAction === 'start' ? '🚀 Бот запущен' : '⛔ Бот остановлен'),
+                            onError:   () => toast.error('Ошибка управления ботом'),
+                        });
+                        setConfirmAction(null);
+                    }}
+                    onCancel={() => setConfirmAction(null)}
+                />
+            )}
+        </>
     );
 }

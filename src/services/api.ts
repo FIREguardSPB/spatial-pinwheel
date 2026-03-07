@@ -2,10 +2,11 @@ import axios from 'axios';
 import { useAppStore } from '../store';
 import { toast } from 'sonner';
 
-const BASE_URL = import.meta.env.VITE_API_URL || '/api';
+const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
 export const apiClient = axios.create({
     baseURL: BASE_URL,
+    timeout: 15000,
     headers: {
         'Content-Type': 'application/json',
     },
@@ -16,6 +17,7 @@ apiClient.interceptors.request.use(
     (config) => {
         const token = useAppStore.getState().authToken;
         if (token) {
+            config.headers = config.headers ?? {};
             config.headers.Authorization = `Bearer ${token}`;
         }
         return config;
@@ -32,8 +34,11 @@ apiClient.interceptors.response.use(
             console.warn('Unauthorized access');
             toast.error('Unauthorized: Please check your token');
         } else {
-            const msg = error.response?.data?.message || error.message || 'API Error';
-            toast.error(msg);
+            const payloadMessage = typeof error.response?.data === 'object'
+                ? error.response?.data?.message || error.response?.data?.detail
+                : undefined;
+            const msg = payloadMessage || error.message || 'API Error';
+            toast.error(String(msg));
         }
         return Promise.reject(error);
     }

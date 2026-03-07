@@ -1,19 +1,25 @@
 version: "3.9"
 
 # =============================================================================
-# Trading Bot Docker Compose
+# Trading Bot — Docker Compose
+# P3-01: Исправлены порты (3000→8000), добавлены CORS_ORIGINS, AUTH_TOKEN,
+#         Prometheus + Grafana для observability, redis volume
+#
 # Profiles:
-#   - mock: Local dev with mock data
-#   - tbank_sandbox: TBank sandbox integration
-#   - prod: Production deployment
+#   mock            - Локальная разработка (mock data, без T-Bank)
+#   tbank_sandbox   - T-Bank Sandbox integration
+#   prod            - Production (+ frontend + nginx)
+#   monitoring      - Prometheus + Grafana (добавить к любому профилю)
+#
+# Запуск:
+#   ./scripts/deploy.sh mock up
+#   docker compose -f backend/infra/docker-compose.yml --profile mock up -d
 # =============================================================================
 
 services:
-  # ---------------------------------------------------------------------------
-  # Database
-  # ---------------------------------------------------------------------------
+  # ─── Database ────────────────────────────────────────────────────────────────
   postgres:
-    profiles: [ "mock", "tbank_sandbox", "prod" ]
+    profiles: [mock, tbank_sandbox, prod]
     image: postgres:16-alpine
     container_name: bot_postgres
     environment:
@@ -25,81 +31,81 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bot} -d ${POSTGRES_DB:-botdb}" ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bot} -d ${POSTGRES_DB:-botdb}"]
       interval: 5s
       timeout: 3s
       retries: 20
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
-  # Redis
-  # ---------------------------------------------------------------------------
+  # ─── Redis ───────────────────────────────────────────────────────────────────
   redis:
-    profiles: [ "mock", "tbank_sandbox", "prod" ]
+    profiles: [mock, tbank_sandbox, prod]
     image: redis:7-alpine
     container_name: bot_redis
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
-  # API Service
-  # ---------------------------------------------------------------------------
+  # ─── API ─────────────────────────────────────────────────────────────────────
   api:
-    profiles: [ "mock", "tbank_sandbox", "prod" ]
+    profiles: [mock, tbank_sandbox, prod]
     image: ${API_IMAGE:-trading-bot-api:local}
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
     container_name: bot_api
     environment:
-      APP_ENV: ${APP_ENV:-prod}
+      APP_ENV: ${APP_ENV:-production}
+      APP_PORT: "8000"
       API_PREFIX: "/api/v1"
       DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-bot}:${POSTGRES_PASSWORD:-bot}@postgres:5432/${POSTGRES_DB:-botdb}"
       REDIS_URL: "redis://redis:6379/0"
       SSE_KEEPALIVE_SECONDS: "20"
       AUTH_TOKEN: "${AUTH_TOKEN:-}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}"
       GIT_COMMIT: "${GIT_COMMIT:-HEAD}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      UVICORN_WORKERS: "${UVICORN_WORKERS:-1}"
     ports:
-      - "${API_PORT:-3000}:3000"
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "python", "-c", "import urllib.request; r=urllib.request.urlopen('http://localhost:3000/api/v1/health', timeout=3); assert r.status==200; r.read(); r.close()" ]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
       timeout: 10s
+      start_period: 20s
       retries: 3
+    restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
-  # Worker Service
-  # ---------------------------------------------------------------------------
+  # ─── Worker ──────────────────────────────────────────────────────────────────
   worker:
-    profiles: [ "mock", "tbank_sandbox", "prod" ]
+    profiles: [mock, tbank_sandbox, prod]
     image: ${WORKER_IMAGE:-trading-bot-worker:local}
     build:
       context: ..
       dockerfile: apps/worker/Dockerfile
     container_name: bot_worker
     environment:
-      APP_ENV: ${APP_ENV:-prod}
+      APP_ENV: ${APP_ENV:-production}
       DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-bot}:${POSTGRES_PASSWORD:-bot}@postgres:5432/${POSTGRES_DB:-botdb}"
       REDIS_URL: "redis://redis:6379/0"
       TF: "${TF:-1m}"
-      UNIVERSE_SIZE: "${UNIVERSE_SIZE:-25}"
-      SIGNAL_INTERVAL_SECONDS: "${SIGNAL_INTERVAL_SECONDS:-30}"
-      BROKER_PROVIDER: "${BROKER_PROVIDER:-mock}"
+      BROKER_PROVIDER: "${BROKER_PROVIDER:-paper}"
       TBANK_TOKEN: "${TBANK_TOKEN:-}"
       TBANK_ACCOUNT_ID: "${TBANK_ACCOUNT_ID:-}"
-      TBANK_SANDBOX: "${TBANK_SANDBOX:-false}"
+      TBANK_SANDBOX: "${TBANK_SANDBOX:-true}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,23 +113,67 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import apps.worker.main"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
-  # Frontend (Production only)
-  # ---------------------------------------------------------------------------
+  # ─── Frontend (prod only) ────────────────────────────────────────────────────
   frontend:
-    profiles: [ "prod" ]
+    profiles: [mock, prod]
     image: ${FRONTEND_IMAGE:-trading-bot-frontend:local}
     build:
       context: ../..
       dockerfile: Dockerfile
     container_name: bot_frontend
     ports:
-      - "${FRONTEND_PORT:-80}:80"
+      - "${FRONTEND_PORT:-5173}:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # ─── Prometheus (monitoring profile) ─────────────────────────────────────────
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus:v2.51.0
+    container_name: bot_prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+    restart: unless-stopped
+
+  # ─── Grafana (monitoring profile) ────────────────────────────────────────────
+  grafana:
+    profiles: [monitoring]
+    image: grafana/grafana:10.4.0
+    container_name: bot_grafana
+    ports:
+      - "127.0.0.1:3100:3000"
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    depends_on:
+      - prometheus
     restart: unless-stopped
 
 volumes:
   pgdata:
+  redisdata:
+  promdata:
+  grafanadata:

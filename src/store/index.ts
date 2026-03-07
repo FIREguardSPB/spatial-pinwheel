@@ -6,6 +6,10 @@ interface AppState {
     authToken: string | null;
     setAuthToken: (token: string | null) => void;
 
+    // Theme
+    theme: 'dark' | 'light';
+    toggleTheme: () => void;
+
     // Settings
     isUiDemoMode: boolean;
     isMockMode: boolean; // Server-side mock
@@ -33,6 +37,11 @@ export const useAppStore = create<AppState>()(
             (set) => ({
                 authToken: import.meta.env.VITE_API_TOKEN || null, // default from env
                 setAuthToken: (token) => set({ authToken: token }),
+
+                theme: 'dark' as const,
+                toggleTheme: () => set((state) => ({
+                    theme: state.theme === 'dark' ? 'light' : 'dark'
+                })),
 
                 // Client-Side Demo Mode (Strict)
                 isUiDemoMode: import.meta.env.VITE_UI_DEMO_MODE === 'true',
@@ -81,6 +90,7 @@ export const useAppStore = create<AppState>()(
                 name: 'app-storage-v2',
                 partialize: (state) => ({
                     authToken: state.authToken,
+                    theme: state.theme,
                     isMockMode: state.isMockMode,
                     selectedInstrument: state.selectedInstrument,
                     selectedTimeframe: state.selectedTimeframe,

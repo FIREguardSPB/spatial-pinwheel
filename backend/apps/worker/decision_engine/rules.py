@@ -399,3 +399,144 @@ def score_costs(
         )
 
     return score, reasons
+
+
+# ─── P5-02: Volume Filter ─────────────────────────────────────────────────────
+
+def score_volume(
+    volume_ratio: float,
+    max_score: int = 10,
+    min_ratio: float = 0.5,
+    anomalous_ratio: float = 3.0,
+) -> tuple[int, "Reason"]:
+    """
+    Volume-based score.
+    Returns (score, reason).
+
+    < 0.5  → BLOCK  (dead market — no liquidity)
+    > 3.0  → WARN   (anomalous spike — spread risk)
+    else   → full score
+    """
+    if volume_ratio is None:
+        half = max_score // 2
+        return half, Reason(
+            code=ReasonCode.VOLUME_OK,
+            severity=Severity.INFO,
+            msg="Volume ratio unavailable — partial score",
+        )
+    if volume_ratio < min_ratio:
+        return 0, Reason(
+            code=ReasonCode.VOLUME_LOW,
+            severity=Severity.BLOCK,
+            msg=f"Volume too low ({volume_ratio:.2f}x avg) — min {min_ratio:.1f}x",
+        )
+    if volume_ratio > anomalous_ratio:
+        half = max_score // 2
+        return half, Reason(
+            code=ReasonCode.VOLUME_ANOMALOUS,
+            severity=Severity.WARN,
+            msg=f"Volume spike ({volume_ratio:.2f}x avg) — possible wide spread",
+        )
+    return max_score, Reason(
+        code=ReasonCode.VOLUME_OK,
+        severity=Severity.INFO,
+        msg=f"Volume OK ({volume_ratio:.2f}x avg)",
+    )
+
+
+# ─── P5-03: Session Filter ───────────────────────────────────────────────────
+
+def check_session(
+    no_trade_opening_minutes: int = 10,
+    close_before_end_minutes: int = 10,
+    session_type: str = "main",
+) -> "Optional[Reason]":
+    """
+    P5-03: Hard-reject if outside trading session or too close to open/close.
+    Returns Reason (BLOCK) if trading not allowed, None if OK.
+    """
+    from core.utils.session import (
+        is_trading_session, minutes_until_session_end,
+        _msk_now, MOEX_OPEN,
+    )
+    from datetime import timedelta
+
+    if not is_trading_session():
+        return Reason(
+            code=ReasonCode.SESSION_CLOSED,
+            severity=Severity.BLOCK,
+            msg="Outside MOEX trading session",
+        )
+
+    # Opening gap protection: first N minutes after open
+    if no_trade_opening_minutes > 0:
+        now_msk = _msk_now()
+        session_open = now_msk.replace(
+            hour=MOEX_OPEN.hour, minute=MOEX_OPEN.minute, second=0, microsecond=0
+        )
+        minutes_since_open = (now_msk - session_open).total_seconds() / 60
+        if 0 < minutes_since_open < no_trade_opening_minutes:
+            return Reason(
+                code=ReasonCode.SESSION_OPENING_GAP,
+                severity=Severity.BLOCK,
+                msg=f"Opening gap protection: {minutes_since_open:.0f}m < {no_trade_opening_minutes}m",
+            )
+
+    # Too close to session end
+    if close_before_end_minutes > 0:
+        remaining = minutes_until_session_end()
+        if 0 < remaining < close_before_end_minutes:
+            return Reason(
+                code=ReasonCode.SESSION_CLOSED,
+                severity=Severity.BLOCK,
+                msg=f"Too close to session end: {remaining:.0f}m remaining",
+            )
+
+    return None
+
+
+# ─── P5-04: HTF trend ────────────────────────────────────────────────────────
+
+def score_htf_alignment(
+    signal_side: str,
+    htf_trend: Optional[str],
+    htf_bonus: int = 5,
+    max_score: int = 5,
+) -> tuple[int, "Reason"]:
+    """
+    P5-04: Bonus score when signal aligns with higher-timeframe trend.
+    """
+    if htf_trend is None or htf_trend == "flat":
+        return max_score // 2, Reason(
+            code=ReasonCode.HTF_CONFLICT,
+            severity=Severity.WARN,
+            msg="HTF trend unknown or flat — reduced confidence",
+        )
+    aligned = (
+        (signal_side == "BUY" and htf_trend == "up")
+        or (signal_side == "SELL" and htf_trend == "down")
+    )
+    if aligned:
+        return max_score, Reason(
+            code=ReasonCode.HTF_ALIGNED,
+            severity=Severity.INFO,
+            msg=f"HTF aligned ({htf_trend})",
+        )
+    return 0, Reason(
+        code=ReasonCode.HTF_CONFLICT,
+        severity=Severity.WARN,
+        msg=f"HTF conflict: signal={signal_side} vs HTF={htf_trend}",
+    )
+
+# Alias for backward compatibility (engine.py uses score_volatility_soft)
+score_volatility_soft = score_volatility
+
+# Wrapper: engine.py expects (int, Reason), score_levels returns (int, list[Reason])
+def score_level_clearance(
+    entry: float, tp: float, nearest_level, side: str, max_score: int = 20
+):
+    score, reasons_list = score_levels(entry, tp, nearest_level, side, max_score)
+    reason = reasons_list[0] if reasons_list else Reason(
+        code=ReasonCode.LEVEL_UNKNOWN, severity=Severity.INFO, msg="No level reason"
+    )
+    return score, reason

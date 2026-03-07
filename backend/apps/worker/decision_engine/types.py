@@ -44,6 +44,19 @@ class ReasonCode(str, Enum):
     LIQUIDITY_UNKNOWN = "LIQUIDITY_UNKNOWN"
     LIQUIDITY_BAD = "LIQUIDITY_BAD"
 
+    # P5-02: Volume
+    VOLUME_LOW = "VOLUME_LOW"
+    VOLUME_ANOMALOUS = "VOLUME_ANOMALOUS"
+    VOLUME_OK = "VOLUME_OK"
+
+    # P5-03: Session
+    SESSION_CLOSED = "SESSION_CLOSED"
+    SESSION_OPENING_GAP = "SESSION_OPENING_GAP"
+
+    # P5-04: Multi-timeframe
+    HTF_ALIGNED = "HTF_ALIGNED"
+    HTF_CONFLICT = "HTF_CONFLICT"
+
 
 class Reason(BaseModel):
     code: ReasonCode
@@ -57,6 +70,9 @@ class MarketSnapshot(BaseModel):
     last_price: Decimal
     spread: Optional[Decimal] = None
     volume_24h: Optional[Decimal] = None
+    # P5-04: Higher timeframe trend info
+    htf_trend: Optional[str] = None     # "up" | "down" | "flat"
+    htf_ema_slope: Optional[float] = None
 
 
 class DecisionResult(BaseModel):

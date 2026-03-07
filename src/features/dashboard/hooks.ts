@@ -56,11 +56,15 @@ export const useDailyStats = () => {
     return useQuery({
         queryKey: [QUERY_KEYS.DAILY_STATS],
         queryFn: async () => {
-            return {
-                pnl: 125.50,
-                tradesCount: 4,
-                maxDrawdown: -50.0,
-            };
-        }
+            const { isMockMode } = await import('../../store').then(m => m.useAppStore.getState());
+            if (isMockMode) return { pnl: 125.50, tradesCount: 4, maxDrawdown: -50.0 };
+            try {
+                const { data } = await apiClient.get('/account/daily-stats');
+                return { pnl: data.day_pnl ?? 0, tradesCount: data.trades_count ?? 0, maxDrawdown: 0 };
+            } catch {
+                return { pnl: 0, tradesCount: 0, maxDrawdown: 0 };
+            }
+        },
+        refetchInterval: 30_000,
     });
 }

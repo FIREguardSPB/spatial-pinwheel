@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 from core.storage.session import get_db
 from core.storage.repos import signals as repo
 from core.models import schemas
+from apps.api.deps import verify_token
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_token)])
 
 
 @router.get("", response_model=schemas.SignalList)
@@ -19,19 +20,10 @@ def list_signals(limit: int = 50, status: str = Query(None), db: Session = Depen
     # We need to return a dict or object that matches schema.
     # repo returns SQLAlchemy models.
 
+    # P3-04: ts is stored as Unix ms in DB — pass through directly (no conversion needed)
     transformed = []
     for s in items:
-        # Create a dict copy
         s_dict = {c.name: getattr(s, c.name) for c in s.__table__.columns}
-        # Convert TS
-        if s_dict.get("ts"):
-            # Auto-detect MS vs Seconds
-            ts_val = s_dict["ts"]
-            if ts_val > 10000000000:  # It's MS
-                s_dict["ts"] = int(ts_val / 1000)
-            else:
-                s_dict["ts"] = ts_val
-
         transformed.append(s_dict)
 
     return {"items": transformed, "next_cursor": None}

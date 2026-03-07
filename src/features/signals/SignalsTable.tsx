@@ -3,6 +3,9 @@ import { useSignals, useSignalAction } from './hooks';
 import { format } from 'date-fns';
 import clsx from 'clsx';
 import { Check, X, Clock } from 'lucide-react';
+import { toast } from 'sonner';
+import { SignalsTableSkeleton, EmptyState, ErrorState } from '../../components/ui/UIComponents';
+import { AIBadgeCell, AIDecisionCard } from './AIDecisionCard';
 import { COLORS } from '../../constants';
 
 export const SignalsTable: React.FC = () => {
@@ -13,16 +16,19 @@ export const SignalsTable: React.FC = () => {
 
     const { mutate: performAction, isPending: isActionPending } = useSignalAction();
     const [processingId, setProcessingId] = useState<string | null>(null);
+    const [expandedAI, setExpandedAI] = useState<string | null>(null);
 
     const handleAction = (id: string, action: 'approve' | 'reject') => {
         setProcessingId(id);
         performAction({ id, action }, {
-            onSettled: () => setProcessingId(null)
+            onSuccess: () => toast.success(action === 'approve' ? '✅ Сигнал одобрен' : '❌ Сигнал отклонён'),
+            onError:   () => toast.error('Ошибка выполнения действия'),
+            onSettled: () => setProcessingId(null),
         });
     };
 
-    if (isLoading) return <div className="p-8 text-center text-gray-500">Loading signals...</div>;
-    if (isError) return <div className="p-8 text-center text-red-500 font-bold">Failed to load signals. API Disconnected.</div>;
+    if (isLoading) return <SignalsTableSkeleton />;
+    if (isError) return <ErrorState message="Не удалось загрузить сигналы" onRetry={() => window.location.reload()} />;
 
     return (
         <div className="h-full overflow-y-auto overflow-x-auto bg-gray-900 border border-gray-800 rounded-lg shadow-inner">
@@ -39,6 +45,7 @@ export const SignalsTable: React.FC = () => {
                         <th className="px-6 py-3">SL / TP</th>
                         <th className="px-6 py-3">Size</th>
                         <th className="px-6 py-3">Status</th>
+                        <th className="px-6 py-3">AI</th>
                         <th className="px-6 py-3 text-right">Actions</th>
                     </tr>
                 </thead>
@@ -50,6 +57,7 @@ export const SignalsTable: React.FC = () => {
                         const reasons = decisionData?.reasons || [];
 
                         return (
+                            <React.Fragment key={signal.id}>
                             <tr key={signal.id} className="hover:bg-gray-800/50 transition-colors">
                                 <td className="px-6 py-4 font-mono text-gray-400">
                                     {format(signal.ts * (signal.ts > 10000000000 ? 1 : 1000), 'HH:mm:ss')}
@@ -116,6 +124,15 @@ export const SignalsTable: React.FC = () => {
                                 <td className="px-6 py-4">
                                     <StatusBadge status={signal.status} />
                                 </td>
+                                <td className="px-6 py-4">
+                                    <AIBadgeCell
+                                        aiDecision={signal.meta?.ai_decision}
+                                        deDecision={(signal.meta?.decision as any)?.decision}
+                                        finalDecision={signal.meta?.final_decision}
+                                        expanded={expandedAI === signal.id}
+                                        onToggle={() => setExpandedAI(expandedAI === signal.id ? null : signal.id)}
+                                    />
+                                </td>
                                 <td className="px-6 py-4 text-right">
                                     {signal.status === 'pending_review' && (
                                         <div className="flex justify-end gap-2">
@@ -123,7 +140,7 @@ export const SignalsTable: React.FC = () => {
                                                 onClick={() => handleAction(signal.id, 'approve')}
                                                 disabled={isActionPending}
                                                 className="p-1 rounded bg-green-600 hover:bg-green-500 text-white transition-colors disabled:opacity-50"
-                                                title="Approve"
+                                                title="Одобрить"
                                             >
                                                 <Check className="w-4 h-4" />
                                             </button>
@@ -131,7 +148,7 @@ export const SignalsTable: React.FC = () => {
                                                 onClick={() => handleAction(signal.id, 'reject')}
                                                 disabled={isActionPending}
                                                 className="p-1 rounded bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-50"
-                                                title="Reject"
+                                                title="Отклонить"
                                             >
                                                 <X className="w-4 h-4" />
                                             </button>
@@ -140,12 +157,27 @@ export const SignalsTable: React.FC = () => {
                                     {processingId === signal.id && <span className="text-xs text-blue-400 animate-pulse">Syncing...</span>}
                                 </td>
                             </tr>
+                            {expandedAI === signal.id && signal.meta?.ai_decision && (
+                                <tr key={signal.id + '-ai'} className="bg-gray-900/30">
+                                    <td colSpan={12} className="px-6 py-4">
+                                        <AIDecisionCard
+                                            aiDecision={signal.meta.ai_decision}
+                                            deDecision={(signal.meta?.decision as any)?.decision}
+                                            finalDecision={signal.meta?.final_decision}
+                                        />
+                                    </td>
+                                </tr>
+                            )}
+                            </React.Fragment>
                         );
                     })}
                     {!signals?.length && (
                         <tr>
-                            <td colSpan={11} className="px-6 py-8 text-center text-gray-600 italic">
-                                No signals in queue
+                            <td colSpan={12} className="p-0">
+                                <EmptyState
+                                    title="Сигналов нет"
+                                    description="Бот ещё не нашёл торговых возможностей. Убедитесь, что бот запущен и торговая сессия активна."
+                                />
                             </td>
                         </tr>
                     )}

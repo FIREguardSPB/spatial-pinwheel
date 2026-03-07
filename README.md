@@ -1,69 +1,69 @@
-# Trading Bot Frontend (BotPanel)
+# Spatial Pinwheel 🌀
 
-Production-grade MVP Frontend for the High-Frequency Trading Bot, built with React, Vite, and Lightweight Charts.
+Автоматический трейдер для MOEX с FastAPI backend, React/Vite frontend, AI-анализом сигналов и risk-management.
 
-## Prerequisites
-- Node.js v20+
-- Docker (optional for production build)
+## Быстрый старт
 
-## Quick Start
+### Вариант 1: Docker Compose
 
-### 1. Installation
-\`\`\`bash
-npm install
-\`\`\`
-
-### 2. Configuration
-Copy the example environment file:
-\`\`\`bash
+```bash
 cp .env.example .env
-\`\`\`
-- Set \`VITE_USE_MOCK=true\` to run without a backend.
-- \`VITE_DEV_PROXY_TARGET\` defaults to \`http://127.0.0.1:3000\`. Adjust in \`.env\` if needed.
+# заполните .env
 
-### 3. Development Mode
-#### Frontend (Port 5173 -> Proxy 3000)
-\`\`\`bash
+docker compose -f backend/infra/docker-compose.yml --profile mock up -d --build
+```
+
+После старта:
+- Frontend: `http://localhost:5173`
+- Backend API: `http://localhost:8000/api/v1`
+- Health: `http://localhost:8000/api/v1/health`
+
+### Вариант 2: локальный запуск без Docker
+
+Backend:
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+uvicorn apps.api.main:app --reload --port 8000
+```
+
+Frontend:
+```bash
+npm ci
 npm run dev
-\`\`\`
-Access at: \`http://localhost:5173\`
+```
 
-#### Backend (Port 3000)
-Run uvicorn with hot reload:
-\`\`\`bash
-# In /backend directory
-uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 3000
-\`\`\`
+## Конфигурация
 
-### 4. Production Build
-Builds the optimized static assets to \`dist/\`.
-\`\`\`bash
+1. Скопируйте `.env.example` в `.env`.
+2. Заполните минимум:
+   - `AUTH_TOKEN`
+   - `DATABASE_URL`
+   - `REDIS_URL`
+3. Для AI и Telegram дополнительно заполните:
+   - `CLAUDE_API_KEY` / `OPENAI_API_KEY`
+   - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+
+## Проверки
+
+```bash
+# Backend syntax
+python -m compileall backend
+
+# Frontend build
 npm run build
-\`\`\`
 
-## Docker & Deployment Notes
+# Frontend tests
+npm run test
+```
 
-To run the frontend in a container (typically served via Nginx):
+## Что исправлено в этой версии
 
-\`\`\`bash
-# Build image
-docker build -t bot-panel-frontend .
-
-# Run container
-docker run -d -p 80:80 bot-panel-frontend
-\`\`\`
-
-### Nginx Configuration Requirements
-For production deployments behind Nginx:
-1.  **API Proxy**: Ensure path \`/api\` is proxied to your backend service (e.g., \`proxy_pass http://backend:3000\`).
-2.  **SSE Support**: Critical for real-time updates.
-    - Set \`proxy_buffering off;\` for the API location.
-    - Ensure timeouts are sufficient (e.g., \`proxy_read_timeout 3600s;\`).
-3.  **Base URL**: The app expects \`VITE_API_URL=/api\` by default to leverage this same-origin proxying.
-
-## Features
-- **Real-time Charting**: TradingView Lightweight Charts with SSE streaming.
-- **Signals Management**: Approve/Reject signals with optimistic updates.
-- **Risk Control**: Configure bot risk parameters and start/stop trading.
-- **Mock Mode**: Fully functional simulation mode for testing UI without backend.
-- **T-Bank Integration**: Available via gRPC (requires `tbank_sandbox` profile).
+- исправлены синтаксические ошибки в `Layout.tsx` и `SettingsPage.tsx`;
+- приведены к единому виду API base URLs (`/api/v1`);
+- добавлены недостающие env-переменные для AI/Telegram;
+- Dockerfile фронтенда переведён на multistage build;
+- добавлены healthchecks для frontend и worker в compose;
+- theme теперь применяется к `documentElement` и сохраняется в persist-store.

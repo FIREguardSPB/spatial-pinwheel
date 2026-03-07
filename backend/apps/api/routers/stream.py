@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from core.events.bus import bus
 from core.config import settings
@@ -7,6 +7,12 @@ import orjson
 
 router = APIRouter()
 
+
+async def verify_stream_token(token: str = Query(default="")):
+    """SSE can't set headers — check token from ?token= query param."""
+    from core.config import settings as cfg
+    if cfg.AUTH_TOKEN and token != cfg.AUTH_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 async def event_generator():
     local_bus = bus.redis.pubsub()
@@ -29,7 +35,7 @@ async def event_generator():
                     pass  # Ignore bad JSON
 
             # Keepalive logic
-            now = asyncio.get_event_loop().time()
+            now = asyncio.get_running_loop().time()
             if now - last_ping > settings.SSE_KEEPALIVE_SECONDS:
                 yield ": ping\n\n"
                 last_ping = now
@@ -40,6 +46,6 @@ async def event_generator():
         await local_bus.unsubscribe(bus.channel)
 
 
-@router.get("/stream")
+@router.get("/stream", dependencies=[Depends(verify_stream_token)])
 async def sse_stream():
     return StreamingResponse(event_generator(), media_type="text/event-stream")

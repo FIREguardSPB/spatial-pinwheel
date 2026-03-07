@@ -1,15 +1,26 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
 
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
-# Copy project definition from root (backend/)
-COPY pyproject.toml /app/pyproject.toml
-RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir .
+# System deps (psycopg needs libpq)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy source code
-COPY . /app
+COPY pyproject.toml /app/
+RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir ".[dev]"
 
-EXPOSE 3000
-CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "3000"]
+COPY . /app/
+
+# P3-01: entrypoint runs alembic migrate then uvicorn
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+
+CMD ["/app/entrypoint.sh"]

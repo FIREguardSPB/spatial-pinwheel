@@ -37,7 +37,7 @@ class StreamService {
         }
 
         // Real SSE (or Server-Side Mock)
-        const baseUrl = import.meta.env.VITE_API_URL || '/api';
+        const baseUrl = import.meta.env.VITE_API_URL || '/api/v1';
         const url = new URL(`${baseUrl}/stream`, window.location.origin);
         if (authToken) {
             url.searchParams.append('token', authToken);
