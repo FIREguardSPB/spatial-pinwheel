@@ -188,6 +188,17 @@ def money_to_decimal(value: Optional[dict[str, Any]]) -> Decimal:
     return units + nano
 
 
+def decimal_to_money_value(amount: Decimal, currency: str = "RUB") -> dict[str, Any]:
+    normalized = amount.quantize(Decimal("0.01"))
+    units = int(normalized.to_integral_value(rounding=ROUND_FLOOR))
+    nano = int((normalized - Decimal(units)) * _NANO)
+    return {
+        "currency": currency.upper(),
+        "units": str(units),
+        "nano": nano,
+    }
+
+
 def quotation_dict_to_decimal(value: Optional[dict[str, Any]]) -> Decimal:
     if not value:
         return Decimal("0")
@@ -258,40 +269,110 @@ class TBankGrpcAdapter:
             logger.error(f"Health check failed: {e}")
             return False
 
+    def _account_list_method(self) -> str:
+        return "SandboxService/GetSandboxAccounts" if self.sandbox else "UsersService/GetAccounts"
+
+    def _portfolio_method(self) -> str:
+        return "SandboxService/GetSandboxPortfolio" if self.sandbox else "OperationsService/GetPortfolio"
+
+    def _positions_method(self) -> str:
+        return "SandboxService/GetSandboxPositions" if self.sandbox else "OperationsService/GetPositions"
+
+    def _withdraw_limits_method(self) -> str:
+        return "SandboxService/GetSandboxWithdrawLimits" if self.sandbox else "OperationsService/GetWithdrawLimits"
+
+    def _post_order_method(self) -> str:
+        return "SandboxService/PostSandboxOrder" if self.sandbox else "OrdersService/PostOrder"
+
+    def _order_state_method(self) -> str:
+        return "SandboxService/GetSandboxOrderState" if self.sandbox else "OrdersService/GetOrderState"
+
     async def get_accounts(self) -> list[dict[str, Any]]:
-        data = await self._rest_post("UsersService/GetAccounts", {})
+        data = await self._rest_post(self._account_list_method(), {"status": "ACCOUNT_STATUS_ALL"})
         return data.get("accounts", []) or []
+
+    async def get_bank_accounts(self) -> list[dict[str, Any]]:
+        if self.sandbox:
+            return []
+        data = await self._rest_post("UsersService/GetBankAccounts", {})
+        return data.get("bankAccounts") or data.get("accounts") or []
+
+    async def open_sandbox_account(self, name: Optional[str] = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if name:
+            payload["name"] = name
+        return await self._rest_post("SandboxService/OpenSandboxAccount", payload)
+
+    async def sandbox_pay_in(self, *, account_id: str, amount: Decimal, currency: str = "RUB") -> dict[str, Any]:
+        return await self._rest_post(
+            "SandboxService/SandboxPayIn",
+            {
+                "accountId": account_id,
+                "amount": decimal_to_money_value(amount, currency),
+            },
+        )
+
+    async def pay_in(self, *, from_account_id: str, to_account_id: str, amount: Decimal, currency: str = "RUB") -> dict[str, Any]:
+        if self.sandbox:
+            raise TBankApiError("UsersService/PayIn is not available for sandbox mode")
+        return await self._rest_post(
+            "UsersService/PayIn",
+            {
+                "fromAccountId": from_account_id,
+                "toAccountId": to_account_id,
+                "amount": decimal_to_money_value(amount, currency),
+            },
+        )
+
+    async def currency_transfer(self, *, from_account_id: str, to_account_id: str, amount: Decimal, currency: str = "RUB") -> dict[str, Any]:
+        if self.sandbox:
+            raise TBankApiError("UsersService/CurrencyTransfer is not available for sandbox mode")
+        return await self._rest_post(
+            "UsersService/CurrencyTransfer",
+            {
+                "fromAccountId": from_account_id,
+                "toAccountId": to_account_id,
+                "amount": decimal_to_money_value(amount, currency),
+            },
+        )
 
     async def resolve_account_id(self, preferred_account_id: Optional[str] = None) -> str:
         accounts = await self.get_accounts()
         if not accounts:
+            if self.sandbox:
+                raise TBankApiError("No sandbox accounts available for the provided T-Bank token")
             raise TBankApiError("No brokerage accounts available for the provided T-Bank token")
 
-        def _is_live_usable(acc: dict[str, Any]) -> bool:
+        def _is_usable(acc: dict[str, Any]) -> bool:
+            status = acc.get("status")
+            if self.sandbox:
+                return status in {"ACCOUNT_STATUS_OPEN", "ACCOUNT_STATUS_NEW"}
             return (
-                acc.get("status") == "ACCOUNT_STATUS_OPEN"
+                status == "ACCOUNT_STATUS_OPEN"
                 and acc.get("accessLevel") == "ACCOUNT_ACCESS_LEVEL_FULL_ACCESS"
             )
 
         if preferred_account_id:
             for account in accounts:
                 if account.get("id") == preferred_account_id:
-                    if not _is_live_usable(account):
+                    if not _is_usable(account):
                         raise TBankApiError(
-                            f"T-Bank account {preferred_account_id} is not OPEN with FULL_ACCESS"
+                            f"T-Bank account {preferred_account_id} is not available for {'sandbox' if self.sandbox else 'live'} trading"
                         )
                     self.account_id = preferred_account_id
                     return preferred_account_id
             raise TBankApiError(f"Configured TBANK_ACCOUNT_ID {preferred_account_id} was not found")
 
-        live_accounts = [acc for acc in accounts if _is_live_usable(acc)]
-        if len(live_accounts) == 1:
-            self.account_id = live_accounts[0]["id"]
+        usable_accounts = [acc for acc in accounts if _is_usable(acc)]
+        if len(usable_accounts) == 1:
+            self.account_id = usable_accounts[0]["id"]
             return self.account_id
-        if not live_accounts:
+        if not usable_accounts:
+            if self.sandbox:
+                raise TBankApiError("No OPEN sandbox T-Bank accounts available for sandbox trading")
             raise TBankApiError("No OPEN/FULL_ACCESS T-Bank accounts available for live trading")
         raise TBankApiError(
-            "Multiple live T-Bank accounts available; specify TBANK_ACCOUNT_ID explicitly"
+            f"Multiple {'sandbox' if self.sandbox else 'live'} T-Bank accounts available; specify TBANK_ACCOUNT_ID explicitly"
         )
 
     async def resolve_instrument(self, instrument_id: str) -> Optional[str]:
@@ -367,15 +448,15 @@ class TBankGrpcAdapter:
 
     async def get_portfolio(self, account_id: Optional[str] = None) -> dict[str, Any]:
         acc_id = await self.resolve_account_id(account_id or self.account_id or None)
-        return await self._rest_post("OperationsService/GetPortfolio", {"accountId": acc_id, "currency": "RUB"})
+        return await self._rest_post(self._portfolio_method(), {"accountId": acc_id, "currency": "RUB"})
 
     async def get_positions(self, account_id: Optional[str] = None) -> dict[str, Any]:
         acc_id = await self.resolve_account_id(account_id or self.account_id or None)
-        return await self._rest_post("OperationsService/GetPositions", {"accountId": acc_id})
+        return await self._rest_post(self._positions_method(), {"accountId": acc_id})
 
     async def get_withdraw_limits(self, account_id: Optional[str] = None) -> dict[str, Any]:
         acc_id = await self.resolve_account_id(account_id or self.account_id or None)
-        return await self._rest_post("OperationsService/GetWithdrawLimits", {"accountId": acc_id})
+        return await self._rest_post(self._withdraw_limits_method(), {"accountId": acc_id})
 
     async def post_market_order(
         self,
@@ -395,11 +476,11 @@ class TBankGrpcAdapter:
             "orderType": "ORDER_TYPE_MARKET",
             "orderId": order_id,
         }
-        return await self._rest_post("OrdersService/PostOrder", payload)
+        return await self._rest_post(self._post_order_method(), payload)
 
     async def get_order_state(self, order_id: str, account_id: Optional[str] = None) -> dict[str, Any]:
         acc_id = await self.resolve_account_id(account_id or self.account_id or None)
-        return await self._rest_post("OrdersService/GetOrderState", {"accountId": acc_id, "orderId": order_id})
+        return await self._rest_post(self._order_state_method(), {"accountId": acc_id, "orderId": order_id})
 
     async def wait_for_terminal_order_state(
         self,

@@ -65,6 +65,20 @@ export const mockDailyStats = {
   open_positions: 1,
 };
 
+
+export const mockTBankAdmin = {
+  available: true,
+  provider: 'tbank',
+  sandbox: true,
+  live_trading_enabled: true,
+  selected_account_id: 'sbx_001',
+  broker_accounts: [
+    { id: 'sbx_001', name: 'Sandbox MOEX 1', type: 'ACCOUNT_TYPE_TINKOFF', status: 'ACCOUNT_STATUS_OPEN', access_level: 'ACCOUNT_ACCESS_LEVEL_FULL_ACCESS', currency: 'RUB', is_selected: true },
+    { id: 'sbx_002', name: 'Sandbox MOEX 2', type: 'ACCOUNT_TYPE_TINKOFF', status: 'ACCOUNT_STATUS_OPEN', access_level: 'ACCOUNT_ACCESS_LEVEL_FULL_ACCESS', currency: 'RUB', is_selected: false },
+  ],
+  bank_accounts: [],
+};
+
 export const mockTrades = [
   {
     trade_id: 'trd_001',
@@ -98,7 +112,17 @@ export const handlers = [
   http.get('/api/v1/state', () => HttpResponse.json(mockBotStatus)),
 
   http.get('/api/v1/account/daily-stats', () => HttpResponse.json(mockDailyStats)),
-  http.get('/api/v1/account/summary', () => HttpResponse.json({ balance: 100000, equity: 100125.5, open_pnl: -42.3 })),
+  http.get('/api/v1/account/summary', () => HttpResponse.json({ mode: 'tbank', balance: 100000, equity: 100125.5, open_pnl: -42.3, day_pnl: 125.5, total_pnl: 2345.1, open_positions: 1, max_drawdown_pct: 4.2, broker_info: { name: 'T-Bank Invest', type: 'broker', status: 'active' } })),
+  http.get('/api/v1/account/history', () => HttpResponse.json({ points: [{ ts: Date.now() - 86400_000 * 3, balance: 100000, equity: 100000, day_pnl: 0 }, { ts: Date.now(), balance: 100000, equity: 100125.5, day_pnl: 125.5 }] })),
+  http.get('/api/v1/account/tbank/accounts', () => HttpResponse.json(mockTBankAdmin)),
+  http.post('/api/v1/account/tbank/select-account', async ({ request }) => {
+    const body = await request.json() as { account_id: string };
+    return HttpResponse.json({ ok: true, selected_account_id: body.account_id });
+  }),
+  http.post('/api/v1/account/tbank/sandbox/open-account', () => HttpResponse.json({ ok: true, created_account_id: 'sbx_003' })),
+  http.post('/api/v1/account/tbank/sandbox/pay-in', () => HttpResponse.json({ ok: true })),
+  http.post('/api/v1/account/tbank/pay-in', () => HttpResponse.json({ ok: true })),
+  http.post('/api/v1/account/tbank/transfer', () => HttpResponse.json({ ok: true })),
 
   http.get('/api/v1/trades', () => HttpResponse.json({ items: mockTrades, total: 1 })),
   http.get('/api/v1/trades/stats', () => HttpResponse.json({ total_trades: 3, win_rate: 66.7, total_pnl: 125.5 })),
