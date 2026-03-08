@@ -21,3 +21,7 @@
 - `python -m compileall backend` — passed.
 - Frontend dependency installation/build could not be fully completed in this container because npm packages are not available here.
 - I verified the frontend code changes at source level and removed the known JSX syntax errors that were blocking compilation earlier.
+
+## 2026-03-08 migration completion fix
+- Added Alembic revision `20260308_03` to create missing tables `watchlist`, `account_snapshots`, `ai_decisions` and missing `settings` columns in an idempotent way.
+- Migration is safe on environments where some columns/tables were created manually.
