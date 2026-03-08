@@ -28,6 +28,9 @@ const PROVIDER_LABELS: Record<string, string> = {
     claude: 'Claude',
     ollama: 'Ollama',
     openai: 'GPT-4o',
+    deepseek: 'DeepSeek Reasoner',
+    'deepseek-reason': 'DeepSeek Reasoner',
+    'deepseek-reasoner': 'DeepSeek Reasoner',
     skip:   '—',
 };
 

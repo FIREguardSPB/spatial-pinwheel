@@ -8,7 +8,7 @@ P4-06: AIProviderRouter — выбор провайдера + цепочка fal
 
 Конфигурация через Settings:
   AI_PRIMARY_PROVIDER   = "claude"
-  AI_FALLBACK_PROVIDERS = "ollama,skip"
+  AI_FALLBACK_PROVIDERS = "deepseek,ollama,skip"
 """
 
 import logging
@@ -19,28 +19,53 @@ from apps.worker.ai.types import AIContext, AIDecision, AIMode, AIResult
 logger = logging.getLogger(__name__)
 
 
+def _normalize_provider_name(name: str) -> str:
+    value = (name or "").strip().lower()
+    aliases = {
+        "deepseek-reason": "deepseek",
+        "deepseek-reasoner": "deepseek",
+        "deepseek_reasoner": "deepseek",
+    }
+    return aliases.get(value, value)
+
+
 def _build_advisor(name: str, config) -> AIAdvisor | None:
     """Instantiate an advisor by provider name. Returns None for 'skip'."""
-    if name == "skip":
+    normalized = _normalize_provider_name(name)
+    if normalized == "skip":
         return None
 
-    if name == "claude":
-        if not config.CLAUDE_API_KEY:
+    if normalized == "claude":
+        api_key = get_token("CLAUDE_API_KEY")
+        if not api_key:
             logger.warning("Claude selected but CLAUDE_API_KEY not set")
             return None
         from apps.worker.ai.providers.claude_advisor import ClaudeAdvisor
-        return ClaudeAdvisor(api_key=get_token("CLAUDE_API_KEY"), model=config.CLAUDE_MODEL)
+        return ClaudeAdvisor(api_key=api_key, model=config.CLAUDE_MODEL)
 
-    if name == "ollama":
+    if normalized == "ollama":
         from apps.worker.ai.providers.ollama_advisor import OllamaAdvisor
         return OllamaAdvisor(base_url=config.OLLAMA_BASE_URL, model=config.OLLAMA_MODEL)
 
-    if name == "openai":
-        if not config.OPENAI_API_KEY:
+    if normalized == "openai":
+        api_key = get_token("OPENAI_API_KEY")
+        if not api_key:
             logger.warning("OpenAI selected but OPENAI_API_KEY not set")
             return None
         from apps.worker.ai.providers.openai_advisor import OpenAIAdvisor
-        return OpenAIAdvisor(api_key=get_token("OPENAI_API_KEY"), model=config.OPENAI_MODEL)
+        return OpenAIAdvisor(api_key=api_key, model=config.OPENAI_MODEL)
+
+    if normalized == "deepseek":
+        api_key = get_token("DEEPSEEK_API_KEY")
+        if not api_key:
+            logger.warning("DeepSeek selected but DEEPSEEK_API_KEY not set")
+            return None
+        from apps.worker.ai.providers.deepseek_advisor import DeepSeekAdvisor
+        return DeepSeekAdvisor(
+            api_key=api_key,
+            model=config.DEEPSEEK_MODEL,
+            base_url=config.DEEPSEEK_BASE_URL,
+        )
 
     logger.warning("Unknown AI provider: %s", name)
     return None
@@ -69,8 +94,8 @@ class AIProviderRouter:
 
     def _build_chain(self) -> list[str]:
         cfg = self._config
-        primary = cfg.AI_PRIMARY_PROVIDER.strip()
-        fallbacks = [p.strip() for p in cfg.AI_FALLBACK_PROVIDERS.split(",") if p.strip()]
+        primary = _normalize_provider_name(cfg.AI_PRIMARY_PROVIDER)
+        fallbacks = [_normalize_provider_name(p) for p in cfg.AI_FALLBACK_PROVIDERS.split(",") if p.strip()]
         chain = [primary] + fallbacks
         if "skip" not in chain:
             chain.append("skip")

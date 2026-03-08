@@ -12,7 +12,13 @@ const AI_MODES = [
   { value: 'required', label: 'Required', desc: 'Без ответа ИИ сигнал не считается готовым.' },
 ] as const;
 
-const PROVIDERS = ['claude', 'openai', 'ollama', 'skip'] as const;
+const PROVIDERS = [
+  { value: 'claude', label: 'Claude' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'deepseek', label: 'DeepSeek Reasoner' },
+  { value: 'ollama', label: 'Ollama' },
+  { value: 'skip', label: 'Skip' },
+] as const;
 
 export const AISettingsPanel: React.FC<{ settings: RiskSettings; onUpdate: (patch: Partial<RiskSettings>) => void }> = ({ settings, onUpdate }) => {
   return (
@@ -66,15 +72,15 @@ export const AISettingsPanel: React.FC<{ settings: RiskSettings; onUpdate: (patc
         <div className="flex flex-wrap gap-2">
           {PROVIDERS.map((provider) => (
             <button
-              key={provider}
+              key={provider.value}
               type="button"
-              onClick={() => onUpdate({ ai_primary_provider: provider })}
+              onClick={() => onUpdate({ ai_primary_provider: provider.value })}
               className={clsx(
                 'px-3 py-2 rounded-lg border text-sm transition-colors',
-                settings.ai_primary_provider === provider ? 'border-blue-500 bg-blue-600 text-white' : 'border-gray-700 bg-gray-950 text-gray-300 hover:border-gray-500',
+                settings.ai_primary_provider === provider.value ? 'border-blue-500 bg-blue-600 text-white' : 'border-gray-700 bg-gray-950 text-gray-300 hover:border-gray-500',
               )}
             >
-              {provider}
+              {provider.label}
             </button>
           ))}
         </div>
@@ -83,12 +89,12 @@ export const AISettingsPanel: React.FC<{ settings: RiskSettings; onUpdate: (patc
       <div>
         <label className="block text-sm text-gray-400 mb-2">Fallback providers</label>
         <input
-          value={settings.ai_fallback_providers ?? 'ollama,skip'}
+          value={settings.ai_fallback_providers ?? 'deepseek,ollama,skip'}
           onChange={(e) => onUpdate({ ai_fallback_providers: e.target.value })}
           className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-blue-500"
-          placeholder="ollama,skip"
+          placeholder="deepseek,ollama,skip"
         />
-        <p className="mt-1 text-xs text-gray-600">Указывайте через запятую: например <code>ollama,skip</code>.</p>
+        <p className="mt-1 text-xs text-gray-600">Указывайте через запятую: например <code>deepseek,ollama,skip</code>.</p>
       </div>
 
       <div>

@@ -43,7 +43,7 @@ npm run dev
    - `DATABASE_URL`
    - `REDIS_URL`
 3. Для AI и Telegram дополнительно заполните:
-   - `CLAUDE_API_KEY` / `OPENAI_API_KEY`
+   - `CLAUDE_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`
    - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 
 ## Проверки

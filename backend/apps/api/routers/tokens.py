@@ -54,6 +54,13 @@ KNOWN_TOKENS: list[dict] = [
         "category":    "ai",
     },
     {
+        "key_name":    "DEEPSEEK_API_KEY",
+        "label":       "DeepSeek API Key",
+        "description": "API-ключ для AI-анализа через DeepSeek Reasoner (deepseek-reasoner). "
+                        "Получить: api.deepseek.com",
+        "category":    "ai",
+    },
+    {
         "key_name":    "TELEGRAM_BOT_TOKEN",
         "label":       "Telegram Bot Token",
         "description": "Токен бота для отправки уведомлений о сигналах и сделках. "
@@ -345,6 +352,23 @@ async def test_token(token_id: str, db: Session = Depends(get_db)):
             if resp.status_code == 200:
                 return {"ok": True, "message": "OpenAI API: connected ✓"}
             return {"ok": False, "message": f"HTTP {resp.status_code}"}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
+    # ── DeepSeek test ──────────────────────────────────────────────────────────
+    if tok.key_name == "DEEPSEEK_API_KEY":
+        import httpx
+        try:
+            resp = httpx.get(
+                "https://api.deepseek.com/models",
+                headers={"Authorization": f"Bearer {plain_value}"},
+                timeout=8.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get("data", [])
+                return {"ok": True, "message": f"DeepSeek API: found {len(models)} model(s)"}
+            return {"ok": False, "message": f"HTTP {resp.status_code}: {resp.text[:120]}"}
         except Exception as e:
             return {"ok": False, "message": str(e)}
 

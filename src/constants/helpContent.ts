@@ -102,7 +102,7 @@ export const HELP_CONTENT: Record<string, HelpEntry> = {
     title: 'AI провайдер',
     tooltip: 'Какая модель используется первой при анализе сигнала.',
     simple: 'Система сначала обращается к основному провайдеру, а если он недоступен — использует запасной список.',
-    example: 'Основной: Claude. Запасные: Ollama, затем Skip.',
+    example: 'Основной: DeepSeek Reasoner. Запасные: Claude или Ollama, затем Skip.',
     advice: 'Добавляйте fallback, чтобы бот не зависел от одного сервиса.',
   },
   ollama_url: {

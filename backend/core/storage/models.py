@@ -82,7 +82,7 @@ class Settings(Base):
     ai_mode = Column(String, default="off")          # off | advisory | override | required
     ai_min_confidence = Column(Integer, default=70)  # min AI confidence for OVERRIDE
     ai_primary_provider = Column(String, default="claude")
-    ai_fallback_providers = Column(String, default="ollama,skip")
+    ai_fallback_providers = Column(String, default="deepseek,ollama,skip")
     ollama_url = Column(String, default="http://localhost:11434")
 
     updated_ts = Column(BigInteger, default=now_utc_ms, onupdate=now_utc_ms)

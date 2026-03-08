@@ -31,7 +31,7 @@ const defaultSettings: RiskSettings = {
   ai_mode: 'off',
   ai_min_confidence: 70,
   ai_primary_provider: 'claude',
-  ai_fallback_providers: 'ollama,skip',
+  ai_fallback_providers: 'deepseek,ollama,skip',
   ollama_url: 'http://localhost:11434',
   no_trade_opening_minutes: 10,
   higher_timeframe: '15m',

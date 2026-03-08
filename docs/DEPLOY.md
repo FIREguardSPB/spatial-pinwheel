@@ -79,6 +79,7 @@ http://localhost:5173
 |-----------|----------|
 | `CLAUDE_API_KEY` | Ключ API Claude (console.anthropic.com) |
 | `OPENAI_API_KEY` | Ключ API OpenAI (platform.openai.com) |
+| `DEEPSEEK_API_KEY` | Ключ API DeepSeek Reasoner (api.deepseek.com) |
 | `OLLAMA_BASE_URL` | URL локального Ollama (http://localhost:11434) |
 | `AI_PRIMARY_PROVIDER` | Основной AI: `claude`, `openai`, `ollama`, `skip` |
 | `AI_FALLBACK_PROVIDERS` | Цепочка fallback: `ollama,skip` |

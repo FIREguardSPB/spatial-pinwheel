@@ -42,7 +42,7 @@ def _settings_to_schema(settings_db) -> schemas.RiskSettings:
         ai_mode=getattr(settings_db, 'ai_mode', 'off'),
         ai_min_confidence=getattr(settings_db, 'ai_min_confidence', 70),
         ai_primary_provider=getattr(settings_db, 'ai_primary_provider', 'claude') or 'claude',
-        ai_fallback_providers=getattr(settings_db, 'ai_fallback_providers', 'ollama,skip') or 'ollama,skip',
+        ai_fallback_providers=getattr(settings_db, 'ai_fallback_providers', 'deepseek,ollama,skip') or 'deepseek,ollama,skip',
         ollama_url=getattr(settings_db, 'ollama_url', 'http://localhost:11434') or 'http://localhost:11434',
         # Session
         no_trade_opening_minutes=getattr(settings_db, 'no_trade_opening_minutes', 10),

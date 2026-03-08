@@ -147,7 +147,7 @@ export interface RiskSettings {
 
   ai_mode?: 'off' | 'advisory' | 'override' | 'required';
   ai_min_confidence?: number;
-  ai_primary_provider?: 'claude' | 'openai' | 'ollama' | 'skip' | string;
+  ai_primary_provider?: 'claude' | 'openai' | 'deepseek' | 'ollama' | 'skip' | string;
   ai_fallback_providers?: string;
   ollama_url?: string;
 

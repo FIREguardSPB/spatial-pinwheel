@@ -38,7 +38,7 @@ export const mockSettings = {
   ai_mode: 'off',
   ai_min_confidence: 70,
   ai_primary_provider: 'claude',
-  ai_fallback_providers: 'ollama,skip',
+  ai_fallback_providers: 'deepseek,ollama,skip',
   ollama_url: 'http://localhost:11434',
   notification_events: 'signal_created,trade_executed',
   account_balance: 100000,

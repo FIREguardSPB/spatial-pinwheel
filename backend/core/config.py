@@ -37,14 +37,17 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str = ""
     CLAUDE_API_KEY: str = ""
+    DEEPSEEK_API_KEY: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
     # ── AI provider settings ──────────────────────────────────────────────────
-    AI_PRIMARY_PROVIDER: str = Field(default="claude")      # claude | openai | ollama | skip
-    AI_FALLBACK_PROVIDERS: str = Field(default="ollama,skip")
+    AI_PRIMARY_PROVIDER: str = Field(default="claude")      # claude | openai | deepseek | ollama | skip
+    AI_FALLBACK_PROVIDERS: str = Field(default="deepseek,ollama,skip")
     CLAUDE_MODEL: str   = "claude-sonnet-4-6"
     OPENAI_MODEL: str   = "gpt-4o"
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_MODEL: str = "deepseek-reasoner"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str   = "llama3.1:8b"
 
