@@ -68,6 +68,12 @@ KNOWN_TOKENS: list[dict] = [
         "category":    "telegram",
     },
     {
+        "key_name":    "TBANK_ACCOUNT_ID",
+        "label":       "T-Bank Account ID",
+        "description": "Идентификатор брокерского счёта T-Bank для live-торговли. Нужен вместе с TBANK_TOKEN.",
+        "category":    "broker",
+    },
+    {
         "key_name":    "TBANK_TOKEN",
         "label":       "T-Bank Invest Token",
         "description": "Токен T-Bank Investments API для реальной торговли на MOEX. "
@@ -339,6 +345,28 @@ async def test_token(token_id: str, db: Session = Depends(get_db)):
             if resp.status_code == 200:
                 return {"ok": True, "message": "OpenAI API: connected ✓"}
             return {"ok": False, "message": f"HTTP {resp.status_code}"}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
+    # ── T-Bank test ────────────────────────────────────────────────────────────
+    if tok.key_name == "TBANK_TOKEN":
+        import httpx
+        try:
+            resp = httpx.post(
+                "https://invest-public-api.tbank.ru/rest/tinkoff.public.invest.api.contract.v1.UsersService/GetAccounts",
+                headers={
+                    "Authorization": f"Bearer {plain_value}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json={},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                return {"ok": False, "message": f"HTTP {resp.status_code}: {resp.text[:120]}"}
+            data = resp.json()
+            accounts = data.get("accounts", [])
+            return {"ok": True, "message": f"T-Bank API: found {len(accounts)} account(s)"}
         except Exception as e:
             return {"ok": False, "message": str(e)}
 

@@ -4,6 +4,7 @@ from core.storage.session import get_db
 from core.storage.repos import settings as repo
 from core.models import schemas
 from apps.api.deps import verify_token
+from apps.api.status import normalize_trade_mode
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -41,7 +42,7 @@ def _settings_to_schema(settings_db) -> schemas.RiskSettings:
         ai_mode=getattr(settings_db, 'ai_mode', 'off'),
         ai_min_confidence=getattr(settings_db, 'ai_min_confidence', 70),
         ai_primary_provider=getattr(settings_db, 'ai_primary_provider', 'claude') or 'claude',
-        ai_fallback_providers=getattr(settings_db, 'ai_fallback_providers', 'ollama') or 'ollama',
+        ai_fallback_providers=getattr(settings_db, 'ai_fallback_providers', 'ollama,skip') or 'ollama,skip',
         ollama_url=getattr(settings_db, 'ollama_url', 'http://localhost:11434') or 'http://localhost:11434',
         # Session
         no_trade_opening_minutes=getattr(settings_db, 'no_trade_opening_minutes', 10),
@@ -55,7 +56,8 @@ def _settings_to_schema(settings_db) -> schemas.RiskSettings:
         notification_events=getattr(settings_db, 'notification_events', ''),
         # Account
         account_balance=float(getattr(settings_db, 'account_balance', 100_000) or 100_000),
-        trade_mode=getattr(settings_db, 'trade_mode', 'review'),
+        trade_mode=normalize_trade_mode(getattr(settings_db, 'trade_mode', 'review')),
+        bot_enabled=bool(getattr(settings_db, 'bot_enabled', False)),
     )
 
 

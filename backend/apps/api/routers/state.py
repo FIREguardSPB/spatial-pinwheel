@@ -21,3 +21,11 @@ def get_trades(db: Session = Depends(get_db)):
 @router.get("/positions", response_model=schemas.PositionList)
 def get_positions(db: Session = Depends(get_db)):
     return {"items": repo.list_positions(db)}
+
+
+from apps.api.status import build_bot_status
+
+
+@router.get("")
+async def get_state_summary(db: Session = Depends(get_db)):
+    return await build_bot_status(db)

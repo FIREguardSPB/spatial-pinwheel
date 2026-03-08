@@ -58,7 +58,8 @@ class RiskSettings(BaseModel):
 
     # Account
     account_balance: Optional[float] = 100_000.0
-    trade_mode: Optional[str] = "review"
+    trade_mode: Optional[Literal["review", "auto_paper", "auto_live"]] = "review"
+    bot_enabled: Optional[bool] = False
 
 
 # --- Signals ---

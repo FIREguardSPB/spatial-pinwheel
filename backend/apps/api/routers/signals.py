@@ -60,7 +60,7 @@ async def approve_signal(
         print(f"Redis publish failed ({e}).")
 
         # Check Feature Flag
-        from core.config import settings
+        from core.config import get_token, settings
 
         if not settings.ALLOW_NO_REDIS:
             print("Redis fallback is DISABLED. Raising 503.")
@@ -70,10 +70,20 @@ async def approve_signal(
             )
 
         print("Falling back to direct execution (ALLOW_NO_REDIS=True).")
+        from core.storage.models import Settings as _Settings
+        _settings = db.query(_Settings).first()
+        if not _settings or not bool(getattr(_settings, "bot_enabled", False)):
+            raise HTTPException(status_code=409, detail="Bot is disabled. Start the bot before executing signals.")
+
         # Fallback: Execute directly in API process (for dev/local without Redis)
         from core.execution.paper import PaperExecutionEngine
+        from core.execution.tbank import TBankExecutionEngine
 
-        engine = PaperExecutionEngine(db)
+        trade_mode = getattr(_settings, "trade_mode", "review") or "review"
+        if trade_mode == "auto_live":
+            engine = TBankExecutionEngine(db, token=get_token("TBANK_TOKEN") or settings.TBANK_TOKEN, account_id=get_token("TBANK_ACCOUNT_ID") or settings.TBANK_ACCOUNT_ID, sandbox=settings.TBANK_SANDBOX)
+        else:
+            engine = PaperExecutionEngine(db)
         await engine.execute_approved_signal(signal_id)
 
     return {"status": "ok"}

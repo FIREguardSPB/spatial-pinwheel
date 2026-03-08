@@ -67,3 +67,18 @@ npm run test
 - Dockerfile фронтенда переведён на multistage build;
 - добавлены healthchecks для frontend и worker в compose;
 - theme теперь применяется к `documentElement` и сохраняется в persist-store.
+
+
+> Note: для реальной торговли через T-Bank нужно заполнить `TBANK_TOKEN`, `TBANK_ACCOUNT_ID`, выставить `BROKER_PROVIDER=tbank` и явно включить `LIVE_TRADING_ENABLED=true`.
+
+
+## Live-торговля через T-Bank
+
+Минимальные переменные окружения:
+- `BROKER_PROVIDER=tbank`
+- `TBANK_TOKEN=<ваш токен>`
+- `TBANK_ACCOUNT_ID=<id брокерского счёта>`
+- `LIVE_TRADING_ENABLED=true`
+- `TBANK_SANDBOX=false`
+
+После этого в UI станет доступен режим `Auto Live`, а ордера будут отправляться в реальный счёт T-Bank.

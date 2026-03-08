@@ -1,3 +1,4 @@
+from apps.api.status import normalize_trade_mode
 from sqlalchemy.orm import Session
 from core.storage.models import Settings
 from core.models import schemas
@@ -68,6 +69,12 @@ def update_settings(db: Session, update_data: schemas.RiskSettings) -> Settings:
         settings.ai_mode = update_data.ai_mode
     if getattr(update_data, 'ai_min_confidence', None) is not None:
         settings.ai_min_confidence = update_data.ai_min_confidence
+    if getattr(update_data, 'ai_primary_provider', None) is not None:
+        settings.ai_primary_provider = update_data.ai_primary_provider
+    if getattr(update_data, 'ai_fallback_providers', None) is not None:
+        settings.ai_fallback_providers = update_data.ai_fallback_providers
+    if getattr(update_data, 'ollama_url', None) is not None:
+        settings.ollama_url = update_data.ollama_url
 
     # Session (P5-03)
     if getattr(update_data, 'no_trade_opening_minutes', None) is not None:
@@ -93,7 +100,9 @@ def update_settings(db: Session, update_data: schemas.RiskSettings) -> Settings:
     if getattr(update_data, 'account_balance', None) is not None:
         settings.account_balance = update_data.account_balance
     if getattr(update_data, 'trade_mode', None) is not None:
-        settings.trade_mode = update_data.trade_mode
+        settings.trade_mode = normalize_trade_mode(update_data.trade_mode)
+    if getattr(update_data, 'bot_enabled', None) is not None:
+        settings.bot_enabled = bool(update_data.bot_enabled)
 
     db.commit()
     db.refresh(settings)

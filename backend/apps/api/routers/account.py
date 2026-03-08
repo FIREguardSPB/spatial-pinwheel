@@ -15,7 +15,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from core.config import settings as cfg
+from core.config import get_token, settings as cfg
+from core.execution.tbank import TBankExecutionEngine
 from core.storage.models import AccountSnapshot, Position, Settings, Trade
 from core.storage.session import get_db
 from apps.api.deps import verify_token
@@ -37,13 +38,22 @@ async def account_summary(db: Session = Depends(get_db)):
     """
     s = db.query(Settings).first()
 
-    mode = cfg.BROKER_PROVIDER  # "paper" | "tbank"
+    trade_mode = getattr(s, "trade_mode", "review") if s else "review"
+    mode = "tbank" if cfg.BROKER_PROVIDER == "tbank" and trade_mode == "auto_live" else cfg.BROKER_PROVIDER
     balance = float(getattr(s, "account_balance", 100_000) or 100_000)
 
-    # Open positions unrealized PnL
     positions = db.query(Position).filter(Position.qty > 0).all()
     open_pnl = sum(float(p.unrealized_pnl or 0) for p in positions)
     equity = balance + open_pnl
+
+    if mode == "tbank":
+        try:
+            portfolio = await TBankExecutionEngine(db, token=get_token("TBANK_TOKEN") or cfg.TBANK_TOKEN, account_id=get_token("TBANK_ACCOUNT_ID") or cfg.TBANK_ACCOUNT_ID, sandbox=cfg.TBANK_SANDBOX).get_portfolio()
+            balance = float(portfolio.get("total_amount_currencies", balance) or balance)
+            equity = float(portfolio.get("total_amount_portfolio", equity) or equity)
+            open_pnl = round(equity - balance, 2)
+        except Exception:
+            pass
 
     # Day PnL from closed positions today (Trade model has no realized_pnl — it's on Position)
     day_pnl = db.query(func.sum(Position.realized_pnl)).filter(

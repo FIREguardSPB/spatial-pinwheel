@@ -34,7 +34,8 @@ class Settings(Base):
     cooldown_minutes = Column(Integer, default=60)
 
     # Decision Engine / Risk
-    trade_mode = Column(String, default="review")  # review, auto_paper, auto_live
+    trade_mode = Column(String, default="review")  # review | auto_paper | auto_live
+    bot_enabled = Column(Boolean, default=False)
     decision_engine_enabled = Column(Boolean, default=True)
     decision_threshold = Column(Integer, default=70)
 
@@ -80,6 +81,9 @@ class Settings(Base):
     # P4-01: AI Advisor settings
     ai_mode = Column(String, default="off")          # off | advisory | override | required
     ai_min_confidence = Column(Integer, default=70)  # min AI confidence for OVERRIDE
+    ai_primary_provider = Column(String, default="claude")
+    ai_fallback_providers = Column(String, default="ollama,skip")
+    ollama_url = Column(String, default="http://localhost:11434")
 
     updated_ts = Column(BigInteger, default=now_utc_ms, onupdate=now_utc_ms)
 

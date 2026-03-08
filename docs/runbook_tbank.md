@@ -16,6 +16,8 @@ BROKER_PROVIDER=tbank
 # Auth (Required for T-Bank)
 TBANK_TOKEN=<your_token>
 TBANK_ACCOUNT_ID=<your_account_id>
+LIVE_TRADING_ENABLED=true
+TBANK_SANDBOX=false
 
 # Feature Flags
 ALLOW_NO_REDIS=false # Set to true only for local dev without Redis

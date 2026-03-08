@@ -44,7 +44,7 @@ jobs:
       - name: Build production
         run: npm run build
         env:
-          VITE_API_BASE_URL: https://trading.chatpsy.online/api
+          VITE_API_URL: /api/v1
 
       - name: Upload frontend artifact
         uses: actions/upload-artifact@v4
@@ -125,10 +125,11 @@ jobs:
             
             # Activate venv and install dependencies
             source venv/bin/activate
-            pip install -r requirements.txt --quiet
+            pip install --quiet -U pip
+            pip install --quiet .
             
-            # Run database migrations (if any)
-            # python -m alembic upgrade head
+            # Run database migrations
+            alembic upgrade head
             
             # Fix permissions
             sudo chown -R www-data:www-data /var/www/trading
@@ -155,7 +156,7 @@ jobs:
             
             # Health check
             sleep 5
-            curl -sf http://127.0.0.1:8001/health || exit 1
+            curl -sf http://127.0.0.1:8000/api/v1/health || exit 1
             
             echo "✅ Deployment verified successfully!"
 

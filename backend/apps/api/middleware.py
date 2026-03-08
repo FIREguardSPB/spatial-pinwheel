@@ -137,7 +137,7 @@ _control_limiter = _RateLimiter(max_calls=20, period=60.0)
 # General API: 300 requests / 60 s per IP
 _api_limiter = _RateLimiter(max_calls=300, period=60.0)
 
-_SENSITIVE_PATHS = {"/api/v1/control", "/api/v1/signals"}
+_SENSITIVE_PATHS = {"/api/v1/bot", "/api/v1/signals"}
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

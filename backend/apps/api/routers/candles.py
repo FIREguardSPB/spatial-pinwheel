@@ -8,14 +8,16 @@ router = APIRouter(dependencies=[Depends(verify_token)])
 
 @router.get("/{ticker}", response_model=List[Candle])
 async def get_candles(ticker: str, tf: str = "15m"):
-    from core.config import settings
+    from core.config import get_token, settings
 
-    if settings.BROKER_PROVIDER == "tbank" and settings.TBANK_TOKEN:
+    runtime_tbank_token = get_token("TBANK_TOKEN") or settings.TBANK_TOKEN
+    runtime_tbank_account = get_token("TBANK_ACCOUNT_ID") or settings.TBANK_ACCOUNT_ID
+    if settings.BROKER_PROVIDER == "tbank" and runtime_tbank_token:
         from apps.broker.tbank import TBankGrpcAdapter
 
         try:
             adapter = TBankGrpcAdapter(
-                token=settings.TBANK_TOKEN, account_id=settings.TBANK_ACCOUNT_ID
+                token=runtime_tbank_token, account_id=runtime_tbank_account
             )
             # Fetch history
             from datetime import datetime, timedelta, timezone

@@ -92,11 +92,11 @@ spatial-pinwheel/
 2. Candles buffered in-memory per instrument
 3. **StrategySelector** picks best strategy; `strategy.analyze()` returns signal or None
 4. **DecisionEngine** scores signal (0–100) against 7 weighted criteria
-5. If score ≥ threshold → signal saved to DB with status `pending_review` (or auto-approved in `live` mode)
+5. If score ≥ threshold → signal saved to DB with status `pending_review` (or auto-approved in `auto_paper` mode)
 6. FastAPI SSE `/stream` pushes `signal_created` event to Frontend
 7. User approves (or auto-approve) → Worker picks up via Redis command queue
 8. **RiskManager** validates against position limits, daily loss, cooldown
-9. **Broker** executes trade (Paper or T-Bank live)
+9. **Execution layer** executes paper trades automatically; T-Bank is currently limited to market data / future broker integration.
 10. **PositionMonitor** checks SL/TP/TimeStop on every tick
 
 ## SSE Events

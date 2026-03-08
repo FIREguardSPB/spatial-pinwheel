@@ -20,7 +20,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from core.config import settings as config
+from core.config import get_token, settings as config
 from core.events.bus import bus
 from core.logging import configure_logging
 from core.metrics import record_tick, update_open_positions, update_pnl
@@ -28,6 +28,7 @@ from core.storage.models import AccountSnapshot, Position, Settings
 from core.storage.session import SessionLocal
 from core.strategy.selector import StrategySelector
 from core.execution.paper import PaperExecutionEngine
+from core.execution.tbank import TBankExecutionEngine
 from core.execution.monitor import PositionMonitor
 from core.utils.session import should_close_before_session_end
 
@@ -119,11 +120,13 @@ async def run_worker() -> None:
     monitors: dict[str, PositionMonitor] = {}
 
     # ── Market stream ──────────────────────────────────────────────────────────
-    if config.BROKER_PROVIDER == "tbank" and config.TBANK_TOKEN:
+    runtime_tbank_token = get_token("TBANK_TOKEN") or config.TBANK_TOKEN
+    runtime_tbank_account = get_token("TBANK_ACCOUNT_ID") or config.TBANK_ACCOUNT_ID
+    if config.BROKER_PROVIDER == "tbank" and runtime_tbank_token:
         from apps.broker.tbank import TBankGrpcAdapter
         adapter = TBankGrpcAdapter(
-            token=config.TBANK_TOKEN,
-            account_id=config.TBANK_ACCOUNT_ID,
+            token=runtime_tbank_token,
+            account_id=runtime_tbank_account,
             sandbox=config.TBANK_SANDBOX,
         )
         market_stream = adapter.stream_marketdata(tickers)
@@ -192,9 +195,15 @@ async def run_worker() -> None:
                 last_snapshot_ts = now
                 async with get_db() as db:
                     open_pos = db.query(Position).filter(Position.qty > 0).count()
-                    # Read real balance from Settings
                     _snap_settings = db.query(Settings).first()
-                    _snap_balance = float(getattr(_snap_settings, 'account_balance', 100_000) or 100_000)
+                    if _snap_settings and getattr(_snap_settings, "trade_mode", "review") == "auto_live" and config.BROKER_PROVIDER == "tbank":
+                        try:
+                            _portfolio = await TBankExecutionEngine(db, token=runtime_tbank_token, account_id=runtime_tbank_account, sandbox=config.TBANK_SANDBOX).get_portfolio()
+                            _snap_balance = float(_portfolio.get("total_amount_currencies", 0) or 0)
+                        except Exception:
+                            _snap_balance = float(getattr(_snap_settings, 'account_balance', 100_000) or 100_000)
+                    else:
+                        _snap_balance = float(getattr(_snap_settings, 'account_balance', 100_000) or 100_000)
                     # Calculate day PnL: sum of realized_pnl updated today + unrealized
                     from sqlalchemy import func
                     _sod = int(datetime.now(timezone.utc).replace(
@@ -220,6 +229,8 @@ async def run_worker() -> None:
             async with get_db() as db:
                 # P5-05: Hot-swap strategy if changed in Settings
                 _cur_settings = db.query(Settings).first()
+                if _cur_settings and not bool(getattr(_cur_settings, "bot_enabled", False)):
+                    continue
                 _new_strategy_name = getattr(_cur_settings, 'strategy_name', 'breakout') if _cur_settings else 'breakout'
                 _new_strategy = selector.get(_new_strategy_name)
                 if processor.strategy.name != _new_strategy.name:
@@ -267,7 +278,15 @@ async def _command_listener(pubsub) -> None:
                 if sig_id:
                     logger.info("Execute command: signal_id=%s", sig_id)
                     async with get_db() as db:
-                        await PaperExecutionEngine(db).execute_approved_signal(sig_id)
+                        _settings = db.query(Settings).first()
+                        if not _settings or not bool(getattr(_settings, "bot_enabled", False)):
+                            logger.warning("Execution skipped because bot is disabled")
+                        else:
+                            trade_mode = getattr(_settings, "trade_mode", "review") or "review"
+                            if trade_mode == "auto_live":
+                                await TBankExecutionEngine(db, token=runtime_tbank_token, account_id=runtime_tbank_account, sandbox=config.TBANK_SANDBOX).execute_approved_signal(sig_id)
+                            else:
+                                await PaperExecutionEngine(db).execute_approved_signal(sig_id)
             await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             break

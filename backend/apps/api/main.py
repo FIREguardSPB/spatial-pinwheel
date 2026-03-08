@@ -21,8 +21,8 @@ from fastapi.responses import JSONResponse
 from apps.api.deps import verify_token, verify_token_query
 from apps.api.middleware import AccessLogMiddleware, RequestIDMiddleware, SecurityHeadersMiddleware, RateLimitMiddleware
 from apps.api.routers import tokens as tokens_router
-from apps.api.routers import candles, logs, settings, signals, state, stream, ai, backtest, trades, account, watchlist
-from core.config import settings as config
+from apps.api.routers import candles, logs, settings, signals, state, stream, ai, backtest, trades, account, watchlist, bot
+from core.config import get_token, settings as config
 from core.logging import configure_logging
 from core.metrics import setup_metrics_endpoint
 from core.version import __version__
@@ -49,6 +49,10 @@ async def lifespan(app: FastAPI):
         )
         raise RuntimeError("AUTH_TOKEN required in production mode")
 
+    if config.APP_ENV == "production" and not config.TOKEN_ENCRYPTION_KEY:
+        logger.critical("TOKEN_ENCRYPTION_KEY is required in production mode")
+        raise RuntimeError("TOKEN_ENCRYPTION_KEY required in production mode")
+
     yield
     logger.info("API shutdown — closing resources")
     try:
@@ -60,7 +64,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Spatial Pinwheel API",
-    description="Automated trading bot for MOEX equities. Paper + Live modes, AI signal analysis, Risk management.",
+    description="Automated trading bot for MOEX equities. Review + auto-paper modes, AI signal analysis, risk management.",
     version=__version__,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -120,11 +124,13 @@ async def health():
     broker = {"provider": config.BROKER_PROVIDER,
                "sandbox": config.TBANK_SANDBOX if config.BROKER_PROVIDER == "tbank" else False}
     if config.BROKER_PROVIDER == "tbank":
-        broker["status"] = "configured" if config.TBANK_TOKEN else "token_missing"
-        # IMPORTANT: TBank execution is currently a stub (P2-09 not yet implemented)
-        broker["execution_mode"] = "stub_paper_fallback"
-        broker["warning"] = "TBank gRPC execution not yet implemented — all orders execute as paper trades"
-        if not config.TBANK_TOKEN:
+        _tbank_token = get_token("TBANK_TOKEN") or config.TBANK_TOKEN
+        _tbank_account = get_token("TBANK_ACCOUNT_ID") or config.TBANK_ACCOUNT_ID
+        broker["status"] = "configured" if _tbank_token else "token_missing"
+        broker["execution_mode"] = "live_enabled" if config.LIVE_TRADING_ENABLED else "live_disabled"
+        broker["live_trading_enabled"] = bool(config.LIVE_TRADING_ENABLED)
+        broker["account_id_configured"] = bool(_tbank_account)
+        if not _tbank_token or (config.LIVE_TRADING_ENABLED and not _tbank_account):
             ok = False
     else:
         broker["status"] = "paper"
@@ -136,7 +142,8 @@ async def health():
         _db2 = _SL2()
         from core.storage.models import Settings as _Sett
         _s2 = _db2.query(_Sett).first()
-        broker["trade_mode"] = getattr(_s2, 'trade_mode', 'review') if _s2 else 'review'
+        from apps.api.status import normalize_trade_mode
+        broker["trade_mode"] = normalize_trade_mode(getattr(_s2, 'trade_mode', 'review') if _s2 else 'review')
         _db2.close()
     except Exception:
         broker["trade_mode"] = "unknown"
@@ -169,6 +176,7 @@ app.include_router(trades.router,    prefix=config.API_PREFIX + "/trades",      
 app.include_router(account.router,   prefix=config.API_PREFIX + "/account",      tags=["account"],     dependencies=_auth)
 app.include_router(watchlist.router, prefix=config.API_PREFIX + "/watchlist",    tags=["watchlist"],   dependencies=_auth)
 app.include_router(watchlist.router, prefix=config.API_PREFIX + "/instruments",  tags=["instruments"], dependencies=_auth)
+app.include_router(bot.router,       prefix=config.API_PREFIX + "/bot",          tags=["bot"],         dependencies=_auth)
 app.include_router(stream.router,    prefix=config.API_PREFIX,                   tags=["stream"],
                    dependencies=[Depends(verify_token_query)])
 app.include_router(tokens_router.router, prefix=config.API_PREFIX + "/tokens", tags=["tokens"])

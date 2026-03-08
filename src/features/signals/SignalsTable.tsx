@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { SignalsTableSkeleton, EmptyState, ErrorState } from '../../components/ui/UIComponents';
 import { AIBadgeCell, AIDecisionCard } from './AIDecisionCard';
 import { COLORS } from '../../constants';
+import { HelpLabel } from '../../components/help/HelpSystem';
 
 export const SignalsTable: React.FC = () => {
     const { data: signals, isLoading, isError } = useSignals();
@@ -40,9 +41,9 @@ export const SignalsTable: React.FC = () => {
                         <th className="px-6 py-3">Side</th>
                         <th className="px-6 py-3">Signal</th>
                         <th className="px-6 py-3">Decision</th>
-                        <th className="px-6 py-3">Score</th>
+                        <th className="px-6 py-3"><HelpLabel label="Score" helpId="de_score" /></th>
                         <th className="px-6 py-3">Price</th>
-                        <th className="px-6 py-3">SL / TP</th>
+                        <th className="px-6 py-3"><HelpLabel label="SL / TP" helpId="sl" /></th>
                         <th className="px-6 py-3">Size</th>
                         <th className="px-6 py-3">Status</th>
                         <th className="px-6 py-3">AI</th>

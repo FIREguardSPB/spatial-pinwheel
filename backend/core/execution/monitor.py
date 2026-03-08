@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from core.events.bus import bus
 from core.storage.models import DecisionLog, Position, Trade
+from core.config import get_token, settings as config
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,18 @@ class PositionMonitor:
         self, position: Position, close_price: float, reason: str
     ) -> None:
         """Закрывает позицию: обновляет PnL, создаёт Trade, очищает qty."""
+        if config.BROKER_PROVIDER == "tbank":
+            try:
+                from core.storage.models import Settings as LiveSettings
+                live_settings = self.db.query(LiveSettings).first()
+                if live_settings and getattr(live_settings, "trade_mode", "review") == "auto_live":
+                    from core.execution.tbank import TBankExecutionEngine
+                    await TBankExecutionEngine(self.db, token=get_token("TBANK_TOKEN") or config.TBANK_TOKEN, account_id=get_token("TBANK_ACCOUNT_ID") or config.TBANK_ACCOUNT_ID, sandbox=config.TBANK_SANDBOX).close_position(position.instrument_id, close_price, reason=reason)
+                    return
+            except Exception as exc:
+                logger.error("Live close failed for %s: %s", position.instrument_id, exc)
+                raise
+
         sign = 1 if position.side == "BUY" else -1
         realized = sign * float(position.qty) * (close_price - float(position.avg_price))
         position.realized_pnl = float(position.realized_pnl or 0) + round(realized, 4)

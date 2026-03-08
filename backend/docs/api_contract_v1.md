@@ -7,7 +7,7 @@ Base prefix: `/api/v1`
 
 ## 3.2 Bot control
 - `GET /bot/status`
-- `POST /bot/start` body: `{ "mode": "review"|"paper"|"live", "paper": true|false }`
+- `POST /bot/start` body: `{ "mode": "review"|"auto_paper"|"auto_live" }`
 - `POST /bot/stop`
 
 ## 3.3 Settings (Risk)

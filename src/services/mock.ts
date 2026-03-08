@@ -129,7 +129,7 @@ export class MockStreamService {
     private emitStatus() {
         const status: BotStatus = {
             is_running: true,
-            mode: 'paper',
+            mode: 'auto_paper',
             is_paper: true,
             active_instrument_id: 'TQBR:SBER',
             connection: { market_data: 'connected', broker: 'connected' }

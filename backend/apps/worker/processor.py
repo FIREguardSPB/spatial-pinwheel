@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session
 from apps.worker.decision_engine.engine import DecisionEngine
 from apps.worker.decision_engine.types import Decision, MarketSnapshot
 from core.events.bus import bus
+from core.config import get_token, settings as config
 from core.execution.paper import PaperExecutionEngine
+from core.execution.tbank import TBankExecutionEngine
 from core.metrics import record_signal, record_risk_block
 from core.risk.manager import RiskManager
 from core.storage.models import DecisionLog, Settings
@@ -268,17 +270,21 @@ class SignalProcessor:
             pass  # Telegram must never block trading
 
         # 13. Auto-execution based on final_decision
-        trade_mode = settings.trade_mode or "review"
-        if final_decision == "TAKE":
+        trade_mode = getattr(settings, "trade_mode", "review") or "review"
+        bot_enabled = bool(getattr(settings, "bot_enabled", False))
+        if final_decision == "TAKE" and bot_enabled:
             if trade_mode == "auto_paper":
                 signal_repo.update_signal_status(db, signal_orm.id, "approved")
                 await PaperExecutionEngine(db).execute_approved_signal(signal_orm.id)
             elif trade_mode == "auto_live":
-                from core.config import settings as cfg
-                if cfg.TBANK_TOKEN:
-                    from core.execution.tbank import TBankExecutionEngine
-                    engine = TBankExecutionEngine(db, cfg.TBANK_TOKEN, cfg.TBANK_ACCOUNT_ID, cfg.TBANK_SANDBOX)
-                    signal_repo.update_signal_status(db, signal_orm.id, "approved")
-                    await engine.execute_approved_signal(signal_orm.id)
+                signal_repo.update_signal_status(db, signal_orm.id, "approved")
+                await TBankExecutionEngine(
+                    db,
+                    token=get_token("TBANK_TOKEN") or config.TBANK_TOKEN,
+                    account_id=get_token("TBANK_ACCOUNT_ID") or config.TBANK_ACCOUNT_ID,
+                    sandbox=config.TBANK_SANDBOX,
+                ).execute_approved_signal(signal_orm.id)
+            elif trade_mode not in {"review", "auto_paper", "auto_live"}:
+                logger.warning("Unsupported trade_mode=%s detected. Falling back to review mode.", trade_mode)
 
         return True

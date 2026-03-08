@@ -24,9 +24,12 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
 
     # Broker Configuration
-    BROKER_PROVIDER: str = "paper"  # tbank, paper
+    BROKER_PROVIDER: str = "paper"  # paper | tbank
     TBANK_TOKEN: str = ""
     TBANK_ACCOUNT_ID: str = ""
+    LIVE_TRADING_ENABLED: bool = False
+    TBANK_ORDER_TIMEOUT_SEC: float = 15.0
+    TBANK_ORDER_POLL_INTERVAL_SEC: float = 0.5
 
     # Feature Flags
     ALLOW_NO_REDIS: bool = False

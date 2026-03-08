@@ -97,7 +97,7 @@ Group=www-data
 WorkingDirectory=/var/www/trading/backend
 Environment="PATH=/var/www/trading/backend/venv/bin"
 EnvironmentFile=/var/www/trading/backend/.env
-ExecStart=/var/www/trading/backend/venv/bin/uvicorn apps.api.main:app --host 127.0.0.1 --port 8001
+ExecStart=/var/www/trading/backend/venv/bin/uvicorn apps.api.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
 
