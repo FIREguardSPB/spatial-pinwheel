@@ -16,6 +16,7 @@ dependencies = [
   "grpcio>=1.62.0",
   "protobuf>=4.25.0",
   "grpcio-tools>=1.62.0",
+  "googleapis-common-protos>=1.63.0",
   # P3-02: Structured logging
   "structlog>=24.1.0",
   # P3-06: Prometheus metrics

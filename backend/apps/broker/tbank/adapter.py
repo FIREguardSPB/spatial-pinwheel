@@ -1,15 +1,26 @@
+from __future__ import annotations
+
 import sys
 import asyncio
 import logging
+import importlib
 from pathlib import Path
 from decimal import Decimal, ROUND_FLOOR
 from typing import AsyncGenerator, Dict, List, Optional, Any
 from datetime import datetime, timezone
 
-import grpc
 import httpx
 
-# Add vendor/investapi/gen to sys.path to allow imports of generated code
+try:
+    import grpc
+    _GRPC_RUNTIME_IMPORT_ERROR: Optional[Exception] = None
+except Exception as exc:  # pragma: no cover - depends on runtime environment
+    grpc = None  # type: ignore[assignment]
+    _GRPC_RUNTIME_IMPORT_ERROR = exc
+
+logger = logging.getLogger(__name__)
+
+# Add backend/vendor/investapi/gen to sys.path so generated stubs can be imported
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 GEN_DIR = BASE_DIR / "vendor" / "investapi" / "gen"
 if str(GEN_DIR) not in sys.path:
@@ -17,17 +28,19 @@ if str(GEN_DIR) not in sys.path:
 
 try:
     from google.protobuf.timestamp_pb2 import Timestamp
-    import common_pb2  # noqa: F401
-    import marketdata_pb2
-    import marketdata_pb2_grpc
-    import instruments_pb2
-    import instruments_pb2_grpc
-    import users_pb2
-    import users_pb2_grpc
-except ImportError as e:
-    logging.getLogger(__name__).error(f"Failed to import gRPC modules: {e}")
+    _TIMESTAMP_IMPORT_ERROR: Optional[Exception] = None
+except Exception as exc:  # pragma: no cover - depends on runtime environment
+    Timestamp = None  # type: ignore[assignment]
+    _TIMESTAMP_IMPORT_ERROR = exc
 
-logger = logging.getLogger(__name__)
+common_pb2 = None
+marketdata_pb2 = None
+marketdata_pb2_grpc = None
+instruments_pb2 = None
+instruments_pb2_grpc = None
+users_pb2 = None
+users_pb2_grpc = None
+_GRPC_IMPORT_ERROR: Optional[Exception] = None
 
 _NANO = Decimal("1000000000")
 PROD_ENDPOINT = "invest-public-api.tbank.ru:443"
@@ -47,6 +60,82 @@ _ORDER_STATUS_TERMINAL = {
     "EXECUTION_REPORT_STATUS_REJECTED",
     "EXECUTION_REPORT_STATUS_CANCELLED",
 }
+
+
+_REQUIRED_STUB_MODULES = (
+    "common_pb2",
+    "marketdata_pb2",
+    "marketdata_pb2_grpc",
+    "instruments_pb2",
+    "instruments_pb2_grpc",
+    "users_pb2",
+    "users_pb2_grpc",
+)
+
+
+def _generated_stubs_ready() -> bool:
+    return all((GEN_DIR / f"{module}.py").exists() for module in _REQUIRED_STUB_MODULES)
+
+
+def _ensure_generated_stubs() -> None:
+    if _generated_stubs_ready():
+        return
+
+    proto_dir = BASE_DIR / "vendor" / "investapi" / "proto"
+    if not proto_dir.exists():
+        raise RuntimeError(
+            f"T-Bank proto sources were not found in {proto_dir}; cannot generate gRPC stubs"
+        )
+
+    try:
+        from gen_protos import generate_grpc
+    except Exception as exc:  # pragma: no cover - import depends on runtime env
+        raise RuntimeError(
+            "Unable to import gen_protos.generate_grpc(); install backend dependencies first"
+        ) from exc
+
+    logger.warning("Generated T-Bank gRPC stubs were missing; regenerating them in %s", GEN_DIR)
+    generate_grpc()
+
+
+def _load_grpc_modules() -> None:
+    global common_pb2, marketdata_pb2, marketdata_pb2_grpc
+    global instruments_pb2, instruments_pb2_grpc, users_pb2, users_pb2_grpc, _GRPC_IMPORT_ERROR
+
+    if all(
+        module is not None
+        for module in (
+            common_pb2,
+            marketdata_pb2,
+            marketdata_pb2_grpc,
+            instruments_pb2,
+            instruments_pb2_grpc,
+            users_pb2,
+            users_pb2_grpc,
+        )
+    ):
+        return
+
+    if _TIMESTAMP_IMPORT_ERROR is not None or Timestamp is None:
+        raise RuntimeError(
+            "google.protobuf is unavailable; install backend dependencies with `pip install -e .[dev]`"
+        ) from _TIMESTAMP_IMPORT_ERROR
+
+    try:
+        _ensure_generated_stubs()
+        common_pb2 = importlib.import_module("common_pb2")
+        marketdata_pb2 = importlib.import_module("marketdata_pb2")
+        marketdata_pb2_grpc = importlib.import_module("marketdata_pb2_grpc")
+        instruments_pb2 = importlib.import_module("instruments_pb2")
+        instruments_pb2_grpc = importlib.import_module("instruments_pb2_grpc")
+        users_pb2 = importlib.import_module("users_pb2")
+        users_pb2_grpc = importlib.import_module("users_pb2_grpc")
+        _GRPC_IMPORT_ERROR = None
+    except Exception as exc:
+        _GRPC_IMPORT_ERROR = exc
+        raise RuntimeError(
+            "Failed to load T-Bank gRPC stubs. Ensure backend/vendor/investapi/gen contains generated *_pb2 files or run `python gen_protos.py`."
+        ) from exc
 
 
 class TBankApiError(RuntimeError):
@@ -69,14 +158,22 @@ def decimal_to_quotation(x: Decimal):
     return units, nano
 
 
+def _new_timestamp() -> Timestamp:
+    if Timestamp is None:
+        raise RuntimeError(
+            "google.protobuf Timestamp is unavailable; install backend dependencies with `pip install -e .[dev]`"
+        ) from _TIMESTAMP_IMPORT_ERROR
+    return Timestamp()
+
+
 def now_timestamp() -> Timestamp:
-    ts = Timestamp()
+    ts = _new_timestamp()
     ts.GetCurrentTime()
     return ts
 
 
 def dt_to_timestamp(dt: datetime) -> Timestamp:
-    ts = Timestamp()
+    ts = _new_timestamp()
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     ts.FromDatetime(dt)
@@ -105,7 +202,7 @@ class TBankGrpcAdapter:
         self.account_id = account_id
         self.sandbox = sandbox
         self.target = SANDBOX_ENDPOINT if sandbox else PROD_ENDPOINT
-        self.credentials = grpc.ssl_channel_credentials()
+        self.credentials = None
         self.metadata = (
             ("authorization", f"Bearer {token}"),
             ("x-app-name", "team.botpanel"),
@@ -115,7 +212,13 @@ class TBankGrpcAdapter:
         self._instrument_cache: Dict[str, dict[str, Any]] = {}
 
     async def _get_channel(self):
+        if grpc is None:
+            raise TBankApiError(
+                "grpcio is unavailable; install backend dependencies with `pip install -e .[dev]`"
+            ) from _GRPC_RUNTIME_IMPORT_ERROR
         if self._channel is None:
+            if self.credentials is None:
+                self.credentials = grpc.ssl_channel_credentials()
             self._channel = grpc.aio.secure_channel(self.target, self.credentials)
         return self._channel
 
@@ -325,6 +428,8 @@ class TBankGrpcAdapter:
         if not uid:
             return []
 
+        _load_grpc_modules()
+
         interval_map = {
             "1m": marketdata_pb2.CANDLE_INTERVAL_1_MIN,
             "5m": marketdata_pb2.CANDLE_INTERVAL_5_MIN,
@@ -353,6 +458,7 @@ class TBankGrpcAdapter:
             return []
 
     async def stream_marketdata(self, instrument_ids: List[str]) -> AsyncGenerator[Dict, None]:
+        _load_grpc_modules()
         backoff = 1
         while True:
             try:

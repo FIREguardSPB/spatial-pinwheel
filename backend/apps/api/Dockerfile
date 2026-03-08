@@ -5,11 +5,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-# System deps (psycopg needs libpq)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libpq-dev curl \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY pyproject.toml /app/
 RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir ".[dev]"
 
@@ -21,6 +16,6 @@ RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=5)" || exit 1
 
 CMD ["/app/entrypoint.sh"]
