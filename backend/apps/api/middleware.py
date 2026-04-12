@@ -137,7 +137,20 @@ _control_limiter = _RateLimiter(max_calls=20, period=60.0)
 # General API: 300 requests / 60 s per IP
 _api_limiter = _RateLimiter(max_calls=300, period=60.0)
 
-_SENSITIVE_PATHS = {"/api/v1/bot", "/api/v1/signals"}
+_SENSITIVE_PATHS = {"/api/v1/bot"}
+
+
+def _is_sensitive_request(request: Request) -> bool:
+    path = request.url.path
+    method = request.method.upper()
+
+    if any(path.startswith(p) for p in _SENSITIVE_PATHS):
+        return True
+
+    if method != "GET" and path.startswith("/api/v1/signals/") and path.endswith(("/approve", "/reject")):
+        return True
+
+    return False
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -147,7 +160,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_ip = request.client.host if request.client else "unknown"
         path = request.url.path
 
-        if any(path.startswith(p) for p in _SENSITIVE_PATHS):
+        if _is_sensitive_request(request):
             if not _control_limiter.is_allowed(client_ip):
                 return JSONResponse(
                     status_code=429,

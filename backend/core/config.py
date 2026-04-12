@@ -1,15 +1,23 @@
+from pathlib import Path
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+try:
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+except Exception:  # pragma: no cover
+    from pydantic_settings import BaseSettings
+    def SettingsConfigDict(**kwargs):
+        return kwargs
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(_BACKEND_ROOT / ".env"), extra="ignore")
 
     APP_ENV: str = "dev"
     API_PREFIX: str = "/api/v1"
     DATABASE_URL: str = "postgresql+psycopg://bot:bot@localhost:5432/botdb"
     REDIS_URL: str = "redis://localhost:6379/0"
-    SSE_KEEPALIVE_SECONDS: int = 20
+    SSE_KEEPALIVE_SECONDS: int = 5
     AUTH_TOKEN: str = ""
 
     # P8-02: Fernet key for encrypting API tokens at rest (32 url-safe base64 bytes)
@@ -24,30 +32,25 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
 
     # Broker Configuration
-    BROKER_PROVIDER: str = "paper"  # paper | tbank
+    BROKER_PROVIDER: str = "paper"  # tbank, paper
     TBANK_TOKEN: str = ""
     TBANK_ACCOUNT_ID: str = ""
-    LIVE_TRADING_ENABLED: bool = False
-    TBANK_ORDER_TIMEOUT_SEC: float = 15.0
-    TBANK_ORDER_POLL_INTERVAL_SEC: float = 0.5
 
     # Feature Flags
     ALLOW_NO_REDIS: bool = False
     TBANK_SANDBOX: bool = False
+    LIVE_TRADING_ENABLED: bool = False
 
     OPENAI_API_KEY: str = ""
     CLAUDE_API_KEY: str = ""
-    DEEPSEEK_API_KEY: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
     # ── AI provider settings ──────────────────────────────────────────────────
-    AI_PRIMARY_PROVIDER: str = Field(default="claude")      # claude | openai | deepseek | ollama | skip
-    AI_FALLBACK_PROVIDERS: str = Field(default="deepseek,ollama,skip")
+    AI_PRIMARY_PROVIDER: str = Field(default="claude")      # claude | openai | ollama | skip
+    AI_FALLBACK_PROVIDERS: str = Field(default="ollama,skip")
     CLAUDE_MODEL: str   = "claude-sonnet-4-6"
     OPENAI_MODEL: str   = "gpt-4o"
-    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-    DEEPSEEK_MODEL: str = "deepseek-reasoner"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str   = "llama3.1:8b"
 
@@ -57,6 +60,19 @@ class Settings(BaseSettings):
 
     # ── Timeframe ─────────────────────────────────────────────────────────────
     TF: str = "1m"   # 1m | 5m | 15m
+
+    # ── Streaming / T-Bank transport ────────────────────────────────────────
+    TBANK_STREAM_MODE: str = "auto"  # auto | grpc | rest_poll
+    TBANK_STREAM_POLL_INTERVAL_SEC: int = 5
+    TBANK_ORDER_TIMEOUT_SEC: float = 15.0
+    TBANK_ORDER_POLL_INTERVAL_SEC: float = 0.5
+    TBANK_CA_CERTS_PATH: str = ""
+    TBANK_SSL_VERIFY: bool = True
+
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_MODEL: str = "deepseek-chat"
+
+    LOG_DIR: str = ""
 
 
 settings = Settings()

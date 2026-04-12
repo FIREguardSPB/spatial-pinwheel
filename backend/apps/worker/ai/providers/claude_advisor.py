@@ -15,6 +15,8 @@ import time
 
 import httpx
 
+from core.utils.http_client import make_async_client
+
 from apps.worker.ai.base import AIAdvisor
 from apps.worker.ai.prompts import SYSTEM_PROMPT, build_user_prompt, parse_xml_response
 from apps.worker.ai.types import AIContext, AIDecision, AIResult
@@ -48,7 +50,7 @@ class ClaudeAdvisor(AIAdvisor):
             "content-type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with make_async_client(timeout=45.0) as client:
             for attempt in range(_MAX_RETRIES):
                 resp = await client.post(_ANTHROPIC_URL, json=payload, headers=headers)
 

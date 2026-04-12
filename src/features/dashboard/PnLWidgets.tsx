@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../services/api';
-import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts';
+import { SimpleAreaChart } from '../../components/charts/SimpleAreaChart';
 import clsx from 'clsx';
 import { TrendingUp, TrendingDown, Activity, DollarSign, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { formatDateTimeMsk } from '../../utils/time';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 interface DailyStats {
@@ -13,53 +14,84 @@ interface DailyStats {
 }
 interface HistoryPoint { ts: number; equity: number; day_pnl: number; }
 interface Position {
-    instrument_id: string; side: string; qty: number;
-    avg_price: number; unrealized_pnl?: number;
+    instrument_id: string; side: string; qty: number; opened_qty?: number;
+    avg_price: number; unrealized_pnl?: number; realized_pnl?: number;
+    sl?: number | null; tp?: number | null; opened_ts: number;
+    opened_signal_id?: string | null; opened_order_id?: string | null;
+    total_fees_est?: number | null;
 }
 interface AccountSummary {
-    balance: number; equity: number; total_pnl: number;
-    day_pnl: number; open_positions: number;
+    balance: number;
+    equity: number;
+    total_pnl: number;
+    day_pnl: number;
+    open_positions: number;
+    max_drawdown_pct?: number;
 }
 
 // ─── Hooks ────────────────────────────────────────────────────────────────
 const useDailyStatsReal = () => useQuery({
     queryKey: ['daily-stats-real'],
     queryFn: async () => {
-        const { data } = await apiClient.get('/account/daily-stats');
-        return data as DailyStats;
+        try {
+            const { data } = await apiClient.get('/account/daily-stats');
+            return data as DailyStats;
+        } catch {
+            return { day_pnl: 0, trades_count: 0, win_rate: 0, best_trade: 0, worst_trade: 0, open_positions: 0 } as DailyStats;
+        }
     },
     refetchInterval: 30_000,
     retry: false,
+    initialData: { day_pnl: 0, trades_count: 0, win_rate: 0, best_trade: 0, worst_trade: 0, open_positions: 0 } as DailyStats,
+    placeholderData: (prev: DailyStats | undefined) => prev ?? ({ day_pnl: 0, trades_count: 0, win_rate: 0, best_trade: 0, worst_trade: 0, open_positions: 0 } as DailyStats),
 });
 
 const useEquityMini = () => useQuery({
     queryKey: ['equity-mini'],
     queryFn: async () => {
-        const { data } = await apiClient.get('/account/history?period_days=7');
-        return (data.points ?? []) as HistoryPoint[];
+        try {
+            const { data } = await apiClient.get('/account/history?period_days=7');
+            return (data.points ?? []) as HistoryPoint[];
+        } catch {
+            return [] as HistoryPoint[];
+        }
     },
     refetchInterval: 300_000,
     retry: false,
+    initialData: [] as HistoryPoint[],
+    placeholderData: (prev: HistoryPoint[] | undefined) => prev ?? [],
 });
 
 const useOpenPositions = () => useQuery({
     queryKey: ['open-positions'],
     queryFn: async () => {
-        const { data } = await apiClient.get('/state/positions');
-        return (data.items ?? []) as Position[];
+        try {
+            const { data } = await apiClient.get('/state/positions');
+            return (data.items ?? []) as Position[];
+        } catch {
+            return [] as Position[];
+        }
     },
     refetchInterval: 15_000,
     retry: false,
+    initialData: [] as Position[],
+    placeholderData: (prev: Position[] | undefined) => prev ?? [],
 });
 
 const useAccountSummary = () => useQuery({
     queryKey: ['account-summary-mini'],
     queryFn: async () => {
-        const { data } = await apiClient.get('/account/summary');
-        return data as AccountSummary;
+        try {
+            const { data } = await apiClient.get('/account/summary');
+            return data as AccountSummary;
+        } catch {
+            return { balance: 0, equity: 0, total_pnl: 0, day_pnl: 0, open_positions: 0, max_drawdown_pct: 0 } as AccountSummary;
+        }
     },
     refetchInterval: 30_000,
     retry: false,
+    initialData: { balance: 0, equity: 0, total_pnl: 0, day_pnl: 0, open_positions: 0, max_drawdown_pct: 0 } as AccountSummary,
+    placeholderData: (prev: AccountSummary | undefined) => prev ?? ({ balance: 0, equity: 0, total_pnl: 0, day_pnl: 0, open_positions: 0, max_drawdown_pct: 0 } as AccountSummary),
 });
 
 // ─── PnLWidget ────────────────────────────────────────────────────────────
@@ -97,8 +129,6 @@ export const PnLWidget: React.FC = () => {
 // ─── DrawdownWidget ───────────────────────────────────────────────────────
 export const DrawdownWidget: React.FC = () => {
     const { data: summary } = useAccountSummary();
-    const dd = summary?.max_drawdown_pct ?? 0; // NOTE: summary doesn't have this yet, fallback 0
-
     return (
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col justify-between">
             <span className="text-gray-500 text-xs uppercase font-bold tracking-wider">Open Pos</span>
@@ -128,27 +158,17 @@ export const EquityCurveChart: React.FC = () => {
             <span className="text-gray-500 text-xs uppercase font-bold tracking-wider">Equity (7d)</span>
             <div className="flex-1 min-h-0 mt-2" style={{ height: 48 }}>
                 {chartData.length >= 2 ? (
-                    <ResponsiveContainer width="100%" height={48}>
-                        <AreaChart data={chartData} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
-                            <defs>
-                                <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%"  stopColor={isUp ? '#10b981' : '#ef4444'} stopOpacity={0.3} />
-                                    <stop offset="95%" stopColor={isUp ? '#10b981' : '#ef4444'} stopOpacity={0.02} />
-                                </linearGradient>
-                            </defs>
-                            <Tooltip
-                                content={({ active, payload }) =>
-                                    active && payload?.length ? (
-                                        <div className="bg-gray-800 text-xs px-2 py-1 rounded border border-gray-700">
-                                            {payload[0].value?.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽
-                                        </div>
-                                    ) : null
-                                }
-                            />
-                            <Area type="monotone" dataKey="v" stroke={isUp ? '#10b981' : '#ef4444'}
-                                strokeWidth={1.5} fill="url(#sparkGrad)" dot={false} />
-                        </AreaChart>
-                    </ResponsiveContainer>
+                    <SimpleAreaChart
+                        data={chartData}
+                        xKey="v"
+                        yKey="v"
+                        height={48}
+                        color={isUp ? '#10b981' : '#ef4444'}
+                        emptyLabel="нет данных"
+                        formatValue={(value) => value.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽'}
+                        formatLabel={() => 'Equity'}
+                        showGrid={false}
+                    />
                 ) : (
                     <div className="h-12 flex items-center justify-center text-gray-700 text-xs">нет данных</div>
                 )}
@@ -168,6 +188,7 @@ export const EquityCurveChart: React.FC = () => {
 // ─── OpenPositionsPanel (right sidebar) ──────────────────────────────────
 export const OpenPositionsPanel: React.FC = () => {
     const { data: positions = [] } = useOpenPositions();
+    const [expandedId, setExpandedId] = useState<string | null>(null);
 
     if (positions.length === 0) return (
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 h-full flex items-center justify-center">
@@ -184,7 +205,12 @@ export const OpenPositionsPanel: React.FC = () => {
                 {positions.map(p => {
                     const upnl = p.unrealized_pnl ?? 0;
                     return (
-                        <div key={p.instrument_id} className="px-4 py-3 hover:bg-gray-800/40 transition-colors">
+                        <button
+                            type="button"
+                            key={p.instrument_id}
+                            onClick={() => setExpandedId((prev) => (prev === p.instrument_id ? null : p.instrument_id))}
+                            className="w-full px-4 py-3 text-left hover:bg-gray-800/40 transition-colors"
+                        >
                             <div className="flex items-center justify-between">
                                 <div>
                                     <span className="font-bold text-gray-200 text-sm">{p.instrument_id}</span>
@@ -198,9 +224,22 @@ export const OpenPositionsPanel: React.FC = () => {
                                 </span>
                             </div>
                             <div className="flex items-center justify-between mt-1 text-xs text-gray-600">
-                                <span>Qty: {p.qty} · Avg: {p.avg_price?.toFixed(2)}</span>
+                                <span>Qty: {p.qty} · Avg: {(p.avg_price ?? 0).toFixed(2)}</span>
+                                <span>{expandedId === p.instrument_id ? 'Скрыть детали' : 'Показать детали'}</span>
                             </div>
-                        </div>
+                            {expandedId === p.instrument_id ? (
+                                <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-gray-800 bg-gray-950/80 p-3 text-[11px] text-gray-400">
+                                    <div><span className="text-gray-600">Открыта:</span> {formatDateTimeMsk(p.opened_ts)}</div>
+                                    <div><span className="text-gray-600">SL:</span> {p.sl != null ? p.sl.toFixed(2) : '—'}</div>
+                                    <div><span className="text-gray-600">TP:</span> {p.tp != null ? p.tp.toFixed(2) : '—'}</div>
+                                    <div><span className="text-gray-600">Opened qty:</span> {p.opened_qty ?? p.qty}</div>
+                                    <div><span className="text-gray-600">Signal:</span> <span className="font-mono">{p.opened_signal_id || '—'}</span></div>
+                                    <div><span className="text-gray-600">Order:</span> <span className="font-mono">{p.opened_order_id || '—'}</span></div>
+                                    <div><span className="text-gray-600">Fees est:</span> {(p.total_fees_est ?? 0).toFixed(2)} ₽</div>
+                                    <div><span className="text-gray-600">Realized:</span> {p.realized_pnl?.toFixed(2) ?? '0.00'} ₽</div>
+                                </div>
+                            ) : null}
+                        </button>
                     );
                 })}
             </div>

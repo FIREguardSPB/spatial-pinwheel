@@ -48,10 +48,17 @@ class AIAdvisor(ABC):
             result = self._parse_response(raw, context)
             result.latency_ms = int((time.perf_counter() - start) * 1000)
             result.raw_response = raw[:4000]  # cap stored response
+            reasoning_short = (result.reasoning or '').strip().replace('\n', ' ')
+            if len(reasoning_short) > 240:
+                reasoning_short = reasoning_short[:237] + '...'
             logger.info(
-                "AI [%s] %s → %s (conf=%d, %.0fms)",
-                self.provider_name, context.instrument_id,
-                result.decision.value, result.confidence, result.latency_ms,
+                "AI [%s] %s → %s (conf=%d, %dms): %s",
+                self.provider_name,
+                context.instrument_id,
+                result.decision.value,
+                result.confidence,
+                result.latency_ms,
+                reasoning_short or 'no reasoning provided',
             )
             return result
         except Exception as e:

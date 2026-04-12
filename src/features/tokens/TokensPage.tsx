@@ -392,7 +392,7 @@ export default function TokensPage() {
       {deleteTok && (
         <ConfirmModal
           title={`Удалить токен "${deleteTok.label}"?`}
-          message={
+          description={
             deleteTok.key_name in { AUTH_TOKEN: 1, CLAUDE_API_KEY: 1, TELEGRAM_BOT_TOKEN: 1 }
               ? 'Системный токен нельзя полностью удалить — значение будет очищено.'
               : `Токен ${deleteTok.key_name} будет удалён безвозвратно.`

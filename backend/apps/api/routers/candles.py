@@ -1,50 +1,27 @@
-from fastapi import Depends, APIRouter
+from __future__ import annotations
+
+import logging
+import time
+from datetime import datetime, timedelta, timezone
 from typing import List
-from core.models.schemas import Candle
+
+_REMOTE_FETCH_COOLDOWN_SEC = 300
+_REMOTE_FETCH_STATE: dict[str, float] = {}
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
 from apps.api.deps import verify_token
+from core.models.schemas import Candle
+from core.storage.repos import candles as candle_repo
+from core.storage.session import get_db
 
 router = APIRouter(dependencies=[Depends(verify_token)])
+logger = logging.getLogger(__name__)
 
 
-@router.get("/{ticker}", response_model=List[Candle])
-async def get_candles(ticker: str, tf: str = "15m"):
-    from core.config import get_token, settings
-
-    runtime_tbank_token = get_token("TBANK_TOKEN") or settings.TBANK_TOKEN
-    runtime_tbank_account = get_token("TBANK_ACCOUNT_ID") or settings.TBANK_ACCOUNT_ID
-    if settings.BROKER_PROVIDER == "tbank" and runtime_tbank_token:
-        from apps.broker.tbank import TBankGrpcAdapter
-
-        try:
-            adapter = TBankGrpcAdapter(
-                token=runtime_tbank_token, account_id=runtime_tbank_account
-            )
-            # Fetch history
-            from datetime import datetime, timedelta, timezone
-
-            to_dt = datetime.now(timezone.utc)
-            from_dt = to_dt - timedelta(days=1)
-
-            candles = await adapter.get_candles(ticker, from_dt, to_dt, interval_str=tf)
-            await adapter.close()
-
-            # Ensure sorted explicitly for charts
-            candles.sort(key=lambda x: x["time"])
-            return candles
-        except Exception as e:
-            print(f"Error fetching candles from TBank: {e}")
-            return []
-
-    # Mock fallback
-    import time
-    import random
-
-    # Generate 100 mock candles history
-    mock_history = []
-    end_ts = int(time.time())
-
-    # Define timeframe duration in milliseconds
-    tf_map = {
+def _tf_seconds(tf: str) -> int:
+    return {
         "1m": 60,
         "5m": 5 * 60,
         "15m": 15 * 60,
@@ -52,37 +29,58 @@ async def get_candles(ticker: str, tf: str = "15m"):
         "4h": 4 * 60 * 60,
         "1d": 24 * 60 * 60,
         "1w": 7 * 24 * 60 * 60,
-    }
+    }.get(tf, 60)
 
-    step = tf_map.get(tf, 60)  # Default to 1m
 
-    start_ts = end_ts - (100 * step)
+def _allow_remote_fetch(cache_key: str) -> bool:
+    now = time.monotonic()
+    allowed_at = float(_REMOTE_FETCH_STATE.get(cache_key) or 0.0)
+    if allowed_at > now:
+        return False
+    _REMOTE_FETCH_STATE[cache_key] = now + _REMOTE_FETCH_COOLDOWN_SEC
+    return True
 
-    current_price = 270.0  # base price
 
-    for i in range(100):
-        candle_ts = start_ts + (i * step)
+@router.get("/{ticker}", response_model=List[Candle])
+async def get_candles(ticker: str, tf: str = "15m", db: Session = Depends(get_db)):
+    from core.config import get_token, settings
 
-        # Random walk
-        change = (random.random() - 0.5) * (current_price * 0.002)
-        close = current_price + change
-        # Add some volatility based on TF
-        volatility = (step / 60) * 0.05  # rough scaling
+    try:
+        cached = candle_repo.list_candles(db, ticker, tf, limit=500)
+    except Exception as exc:
+        logger.error("Failed to read candle cache for %s/%s", ticker, tf, exc_info=exc)
+        cached = []
 
-        open_p = current_price
-        high = max(open_p, close) + random.random() * volatility
-        low = min(open_p, close) - random.random() * volatility
+    runtime_tbank_token = get_token("TBANK_TOKEN") or settings.TBANK_TOKEN
+    runtime_tbank_account = get_token("TBANK_ACCOUNT_ID") or settings.TBANK_ACCOUNT_ID
+    can_fetch_market = bool(runtime_tbank_token)
 
-        mock_history.append(
-            {
-                "time": candle_ts,
-                "open": round(open_p, 2),
-                "high": round(high, 2),
-                "low": round(low, 2),
-                "close": round(close, 2),
-                "volume": int(random.random() * 1000),
-            }
-        )
-        current_price = close
+    if cached:
+        return cached
 
-    return mock_history
+    cache_key = f"{ticker}:{tf}"
+    if can_fetch_market and _allow_remote_fetch(cache_key):
+        # Cold-start fallback only. If local cache already exists, we serve it as-is
+        # and let the worker refresh market data, instead of hammering T-Bank every 15s.
+        from apps.broker.tbank import TBankGrpcAdapter
+        try:
+            adapter = TBankGrpcAdapter(
+                token=runtime_tbank_token,
+                account_id=runtime_tbank_account,
+                sandbox=settings.TBANK_SANDBOX,
+            )
+            to_dt = datetime.now(timezone.utc)
+            from_dt = to_dt - timedelta(days=2 if tf in {"1h", "4h", "1d", "1w"} else 1)
+            candles = await adapter.get_candles(ticker, from_dt, to_dt, interval_str=tf)
+            await adapter.close()
+            candles.sort(key=lambda x: x["time"])
+            if candles:
+                candle_repo.upsert_candles(db, instrument_id=ticker, timeframe=tf, candles=candles, source="api")
+                return candles
+        except Exception as e:
+            logger.warning("Fallback fetch candles failed for %s: %s", ticker, e, exc_info=True)
+    elif can_fetch_market:
+        logger.info("Skip remote candle fetch for %s/%s, empty cache still under cooldown", ticker, tf)
+
+    raise HTTPException(status_code=503, detail={'message': 'No real candle data available', 'instrument_id': ticker, 'timeframe': tf})
+

@@ -49,12 +49,12 @@ describe('SignalsTable', () => {
     expect(container.querySelector('.animate-pulse')).toBeTruthy();
   });
 
-  it('shows error state on API failure', async () => {
+  it('falls back to empty state on API failure', async () => {
     server.use(http.get('/api/v1/signals', () => HttpResponse.json({ error: 'Server error' }, { status: 500 })));
     const { SignalsTable } = await import('../features/signals/SignalsTable');
     renderWithQuery(<SignalsTable />);
     await waitFor(() => {
-      expect(screen.getByText(/не удалось загрузить/i)).toBeInTheDocument();
+      expect(screen.getByText(/сигналов нет/i)).toBeInTheDocument();
     });
   });
 

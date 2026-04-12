@@ -54,6 +54,9 @@ class InternetContext:
     sentiment_score: float = 0.0           # -1.0 .. 1.0 (среднее по новостям)
     macro: MacroData = field(default_factory=MacroData)
     geopolitical_risk: float = 0.0         # 0.0 .. 1.0
+    topics: list[str] = field(default_factory=list)
+    topic_counts: dict[str, int] = field(default_factory=dict)
+    narrative_summary: list[str] = field(default_factory=list)
     from_cache: bool = False
 
 
@@ -66,6 +69,7 @@ class AIContext:
     entry: float
     sl: float
     tp: float
+    size: float
     r: float
     de_score: int
     de_decision: str
@@ -73,6 +77,11 @@ class AIContext:
     de_metrics: dict[str, Any]
     candles_summary: dict[str, Any]        # последние N свечей сводно
     internet: InternetContext | None = None
+    historical_context: dict[str, Any] | None = None
+    symbol_profile: dict[str, Any] | None = None
+    symbol_diagnostics: dict[str, Any] | None = None
+    event_regime: dict[str, Any] | None = None
+    geometry: dict[str, Any] | None = None
 
 
 @dataclass

@@ -1,6 +1,8 @@
 import asyncio
 import httpx
 
+from core.utils.http_client import make_async_client
+
 
 async def debug_api():
     base_url = "http://localhost:3000/api/v1"
@@ -14,7 +16,7 @@ async def debug_api():
     # If DB is empty, we might not see anything.
 
     # Let's try to fetch signals.
-    async with httpx.AsyncClient() as client:
+    async with make_async_client() as client:
         try:
             resp = await client.get(f"{base_url}/signals")
             print(f"GET /signals Status: {resp.status_code}")

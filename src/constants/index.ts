@@ -32,6 +32,7 @@ export const EVENTS = {
     TRADE_FILLED: 'trade_filled',
     BOT_STATUS: 'bot_status',
     KLINE: 'kline',
+    HEARTBEAT: 'heartbeat',
 } as const;
 
 export const QUERY_KEYS = {
@@ -55,4 +56,5 @@ export const API_ENDPOINTS = {
     BOT_ACTION: '/bot',
     SETTINGS: '/settings', // Changed from RISK_SETTINGS
     DECISION_LOG: '/decision-log',
+    WORKER_STATUS: '/worker/status',
 } as const;

@@ -11,8 +11,8 @@ This module performs real broker operations:
 from __future__ import annotations
 
 import logging
-import time
 import uuid
+import time
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -26,7 +26,9 @@ from apps.broker.tbank.adapter import (
 from core.config import settings as config
 from core.events.bus import bus
 from core.risk.manager import RiskManager
-from core.storage.models import AccountSnapshot, DecisionLog, Order, Position, Signal, Trade
+from core.storage.models import AccountSnapshot, Order, Position, Signal, Trade
+from core.storage.decision_log_utils import append_decision_log_best_effort
+from core.utils.ids import new_prefixed_id
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +130,11 @@ class TBankExecutionEngine:
             executed_price = Decimal(str(close_price))
         sign = 1 if position.side == "BUY" else -1
         realized = sign * float(position.qty) * (float(executed_price) - float(position.avg_price))
+        strategy_name = getattr(position, 'strategy', None)
+        trace_id = getattr(position, 'trace_id', None)
 
         trade = Trade(
-            trade_id=f"trd_{uuid.uuid4().hex[:8]}",
+            trade_id=new_prefixed_id("trd"),
             instrument_id=instrument_id,
             broker_id=details.get("uid"),
             ts=int(time.time() * 1000),
@@ -138,6 +142,9 @@ class TBankExecutionEngine:
             price=executed_price,
             qty=Decimal(str(position.qty)),
             order_id=broker_order_id,
+            signal_id=position.opened_signal_id,
+            strategy=strategy_name,
+            trace_id=trace_id,
         )
         self.db.add(trade)
 
@@ -153,6 +160,8 @@ class TBankExecutionEngine:
             filled_qty=Decimal(str(position.qty)),
             status="FILLED",
             related_signal_id=None,
+            strategy=strategy_name,
+            trace_id=trace_id,
         )
         self.db.merge(order)
 
@@ -161,20 +170,22 @@ class TBankExecutionEngine:
         position.qty = Decimal("0")
         position.updated_ts = int(time.time() * 1000)
 
-        self.db.add(DecisionLog(
-            id=f"log_{uuid.uuid4().hex[:8]}",
-            ts=int(time.time() * 1000),
-            type="position_closed",
+        self.db.commit()
+        append_decision_log_best_effort(
+            log_type="position_closed",
             message=f"Live close {instrument_id} @ {float(executed_price):.4f} [{reason}] pnl={realized:.2f}",
             payload={
+                "trace_id": trace_id,
+                "strategy_name": strategy_name,
                 "instrument_id": instrument_id,
                 "reason": reason,
                 "close_price": float(executed_price),
+                "qty": float(position.opened_qty or position.qty or 0),
+                "opened_qty": float(position.opened_qty or position.qty or 0),
                 "realized_pnl": round(realized, 4),
                 "broker_order_id": broker_order_id,
             },
-        ))
-        self.db.commit()
+        )
 
         await self._sync_account_snapshot()
         await bus.publish("positions_updated", {"instrument_id": instrument_id})
@@ -216,6 +227,9 @@ class TBankExecutionEngine:
         if executed_price <= 0:
             executed_price = avg_price if avg_price > 0 else Decimal(str(signal.entry))
 
+        strategy_meta = dict(signal.meta or {})
+        strategy_name = strategy_meta.get('strategy_name') or strategy_meta.get('strategy')
+        trace_id = strategy_meta.get('trace_id')
         order_id = state.get("orderId")
         order = Order(
             order_id=order_id,
@@ -229,6 +243,8 @@ class TBankExecutionEngine:
             filled_qty=qty_units,
             status="FILLED",
             related_signal_id=signal.id,
+            strategy=strategy_name,
+            trace_id=trace_id,
         )
         self.db.merge(order)
 
@@ -238,7 +254,7 @@ class TBankExecutionEngine:
                 trade_qty_units = Decimal(str(int(stage.get("quantity") or lots_executed) * int(details.get("lot", 1))))
                 trade_price = money_to_decimal(stage.get("price")) or executed_price
                 trade = Trade(
-                    trade_id=stage.get("tradeId") or f"trd_{uuid.uuid4().hex[:8]}",
+                    trade_id=stage.get("tradeId") or new_prefixed_id("trd"),
                     instrument_id=signal.instrument_id,
                     broker_id=details.get("uid"),
                     ts=int(time.time() * 1000),
@@ -246,11 +262,14 @@ class TBankExecutionEngine:
                     price=trade_price,
                     qty=trade_qty_units,
                     order_id=order_id,
+                    signal_id=signal.id,
+                    strategy=strategy_name,
+                    trace_id=trace_id,
                 )
                 self.db.merge(trade)
         else:
             trade = Trade(
-                trade_id=f"trd_{uuid.uuid4().hex[:8]}",
+                trade_id=new_prefixed_id("trd"),
                 instrument_id=signal.instrument_id,
                 broker_id=details.get("uid"),
                 ts=int(time.time() * 1000),
@@ -258,6 +277,9 @@ class TBankExecutionEngine:
                 price=executed_price,
                 qty=qty_units,
                 order_id=order_id,
+                signal_id=signal.id,
+                strategy=strategy_name,
+                trace_id=trace_id,
             )
             self.db.add(trade)
 
@@ -268,22 +290,28 @@ class TBankExecutionEngine:
                 broker_id=details.get("uid"),
                 side=signal.side,
                 qty=qty_units,
+                opened_qty=qty_units,
                 avg_price=executed_price,
                 sl=signal.sl,
                 tp=signal.tp,
                 unrealized_pnl=Decimal("0"),
                 realized_pnl=Decimal("0"),
                 opened_ts=int(time.time() * 1000),
+                strategy=strategy_name,
+                trace_id=trace_id,
             )
             self.db.add(position)
         elif Decimal(str(position.qty or 0)) <= 0:
             position.side = signal.side
             position.broker_id = details.get("uid")
             position.qty = qty_units
+            position.opened_qty = qty_units
             position.avg_price = executed_price
             position.sl = signal.sl
             position.tp = signal.tp
             position.unrealized_pnl = Decimal("0")
+            position.strategy = strategy_name or getattr(position, 'strategy', None)
+            position.trace_id = trace_id or getattr(position, 'trace_id', None)
             if not position.opened_ts:
                 position.opened_ts = int(time.time() * 1000)
         elif position.side == signal.side:
@@ -291,10 +319,13 @@ class TBankExecutionEngine:
             total_cost = Decimal(str(position.qty)) * Decimal(str(position.avg_price)) + qty_units * executed_price
             position.avg_price = total_cost / total_qty
             position.qty = total_qty
+            position.opened_qty = total_qty
             position.broker_id = details.get("uid")
             position.sl = signal.sl
             position.tp = signal.tp
             position.unrealized_pnl = Decimal("0")
+            position.strategy = strategy_name or getattr(position, 'strategy', None)
+            position.trace_id = trace_id or getattr(position, 'trace_id', None)
         else:
             current_qty = Decimal(str(position.qty))
             current_avg = Decimal(str(position.avg_price))
@@ -324,19 +355,26 @@ class TBankExecutionEngine:
                     position.opened_ts = int(time.time() * 1000)
 
         signal.status = "executed"
-        self.db.add(DecisionLog(
-            id=f"log_{uuid.uuid4().hex[:8]}",
-            ts=int(time.time() * 1000),
-            type="trade_filled",
+        self.db.commit()
+        append_decision_log_best_effort(
+            log_type="trade_filled",
             message=f"Live fill {qty_units} @ {float(executed_price):.4f} [{signal.side}] {signal.instrument_id}",
             payload={
+                "signal_id": signal.id,
+                "trace_id": trace_id,
+                "instrument_id": signal.instrument_id,
                 "broker_order_id": order_id,
                 "qty": float(qty_units),
                 "price": float(executed_price),
                 "lots_executed": lots_executed,
+                "sl": float(signal.sl),
+                "tp": float(signal.tp),
+                "ai_influenced": bool(signal.ai_influenced),
+                "ai_mode_used": signal.ai_mode_used,
+                "strategy_name": strategy_meta.get("strategy_name") or strategy_meta.get("strategy"),
+                "decision_merge": strategy_meta.get("decision_merge"),
             },
-        ))
-        self.db.commit()
+        )
 
         await bus.publish("orders_updated", {"order_id": order_id})
         await bus.publish("positions_updated", {"instrument_id": signal.instrument_id})

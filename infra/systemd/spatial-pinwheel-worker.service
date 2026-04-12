@@ -1,0 +1,17 @@
+[Unit]
+Description=Spatial Pinwheel Worker
+After=network.target docker.service spatial-pinwheel-api.service
+Requires=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/Money/spatial_pinwheel/backend
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/Projects/Money/spatial_pinwheel/backend/.venv/bin/python -m apps.worker.main
+Restart=always
+RestartSec=3
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

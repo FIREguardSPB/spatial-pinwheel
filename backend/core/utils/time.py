@@ -9,6 +9,7 @@ P3-04: Утилиты для работы со временем.
 """
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 
 def now_ms() -> int:
@@ -60,3 +61,18 @@ def from_datetime(dt: datetime) -> int:
 def to_datetime(ts_ms: int) -> datetime:
     """Unix ms → datetime (UTC)."""
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+
+def now_msk() -> datetime:
+    """Current aware datetime in Europe/Moscow."""
+    return datetime.now(MOSCOW_TZ)
+
+
+def start_of_day_ms(*, tz: ZoneInfo = MOSCOW_TZ, ref: datetime | None = None) -> int:
+    """Unix ms for the start of the current trading day in the requested timezone."""
+    current = ref.astimezone(tz) if ref is not None else datetime.now(tz)
+    sod = current.replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(sod.timestamp() * 1000)

@@ -4,26 +4,31 @@ import type { Signal, SignalStatus } from '../../types';
 import { QUERY_KEYS, API_ENDPOINTS } from '../../constants';
 import { useAppStore } from '../../store';
 
-export const useSignals = (status?: SignalStatus) => {
+type UseSignalsOptions = {
+  enabled?: boolean;
+  limit?: number;
+  refetchInterval?: number | false;
+};
+
+export const useSignals = (status?: SignalStatus, options: UseSignalsOptions = {}) => {
   const { connectionStatus } = useAppStore();
+  const { enabled = true, limit = 20, refetchInterval } = options;
   return useQuery({
-    queryKey: [QUERY_KEYS.SIGNALS, status],
+    queryKey: [QUERY_KEYS.SIGNALS, status, limit],
     queryFn: async () => {
-      const { isMockMode } = useAppStore.getState();
-
-      if (isMockMode) {
-        console.log('[Mock] Generating mock signals');
-        const { generateMockSignals } = await import('../../utils/mockUtils');
-        return generateMockSignals(5);
+      const params = status ? { status, limit } : { limit };
+      try {
+        const res = await apiClient.get<{ items: Signal[] }>(API_ENDPOINTS.SIGNALS, { params });
+        return res.data.items || [];
+      } catch {
+        return [];
       }
-
-      // Real Mode - Fail if API is down
-      const params = status ? { status } : {};
-      const res = await apiClient.get<{ items: Signal[] }>(API_ENDPOINTS.SIGNALS, { params });
-      return res.data.items || [];
     },
-    staleTime: 60 * 1000,
-    refetchInterval: connectionStatus !== 'connected' ? 10000 : false
+    enabled,
+    staleTime: 15 * 1000,
+    placeholderData: (prev) => prev,
+    refetchInterval: refetchInterval ?? (connectionStatus !== 'connected' ? 15000 : 30000),
+    retry: 1,
   });
 };
 
@@ -32,14 +37,6 @@ export const useSignalAction = () => {
 
   return useMutation({
     mutationFn: async ({ id, action, comment }: { id: string, action: 'approve' | 'reject', comment?: string }) => {
-      const { isMockMode } = useAppStore.getState();
-
-      if (isMockMode) {
-        console.log(`[Mock] Action ${action} on signal ${id}`);
-        await new Promise(r => setTimeout(r, 500)); // Simulate latency
-        return { status: 'ok', mocked: true };
-      }
-
       const res = await apiClient.post(API_ENDPOINTS.SIGNALS + '/' + id + '/' + action, { comment });
       return res.data;
     },

@@ -83,3 +83,8 @@ python apps/worker/main.py
   ```bash
   python backend/gen_protos.py
   ```
+
+
+## TLS / SSL certificate errors
+
+If API or Worker fails with `CERTIFICATE_VERIFY_FAILED` while connecting to T-Bank, add a PEM bundle with Russian trusted roots and set `TBANK_CA_CERTS_PATH` (or place the file into `backend/certs/russian-trusted-root-ca.pem`). The adapter will append that bundle to the default trust store for both gRPC and REST calls.

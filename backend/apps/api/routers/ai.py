@@ -11,7 +11,9 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
+from core.config import get_token, settings as cfg
 from core.storage.repos import ai_repo
+from core.storage.repos import settings as settings_repo
 from core.storage.session import get_db
 from apps.api.deps import verify_token
 
@@ -68,3 +70,48 @@ async def ai_export(
         media_type="application/jsonl",
         headers={"Content-Disposition": "attachment; filename=ai_decisions.jsonl"},
     )
+
+
+@router.get("/runtime")
+async def ai_runtime(db: Session = Depends(get_db)):
+    settings = settings_repo.get_settings(db)
+    primary = (getattr(settings, "ai_primary_provider", None) or "deepseek").strip().lower()
+    fallbacks = [p.strip().lower() for p in (getattr(settings, "ai_fallback_providers", None) or "deepseek,ollama,skip").split(',') if p.strip()]
+    chain = [primary, *fallbacks]
+    if 'skip' not in chain:
+        chain.append('skip')
+
+    available = {
+        'claude': bool(get_token('CLAUDE_API_KEY') or cfg.CLAUDE_API_KEY),
+        'openai': bool(get_token('OPENAI_API_KEY') or cfg.OPENAI_API_KEY),
+        'deepseek': bool(get_token('DEEPSEEK_API_KEY')),
+        'ollama': bool(getattr(settings, 'ollama_url', None) or cfg.OLLAMA_BASE_URL),
+        'skip': True,
+    }
+    recent = ai_repo.list_decisions(db, limit=10)
+    last = recent[0] if recent else None
+    return {
+        'enabled': (getattr(settings, 'ai_mode', 'off') or 'off') != 'off',
+        'ai_mode': getattr(settings, 'ai_mode', 'off') or 'off',
+        'min_confidence': int(getattr(settings, 'ai_min_confidence', 55) or 55),
+        'override_policy': getattr(settings, 'ai_override_policy', 'promote_only') or 'promote_only',
+        'primary_provider': primary,
+        'fallback_providers': fallbacks,
+        'provider_chain': chain,
+        'provider_availability': available,
+        'ollama_url': getattr(settings, 'ollama_url', None) or cfg.OLLAMA_BASE_URL,
+        'last_decision': (
+            {
+                'ts': last.ts,
+                'instrument_id': last.instrument_id,
+                'provider': last.provider,
+                'ai_decision': last.ai_decision,
+                'ai_confidence': last.ai_confidence,
+                'final_decision': last.final_decision,
+                'actual_outcome': last.actual_outcome,
+                'latency_ms': last.latency_ms,
+            }
+            if last else None
+        ),
+        'recent_count': len(recent),
+    }

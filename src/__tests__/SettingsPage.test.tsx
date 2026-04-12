@@ -30,27 +30,27 @@ describe('Zustand store', () => {
     expect(useAppStore.getState().selectedInstrument).toBe('TQBR:YNDX');
   });
 
-  it('setMockMode updates mock mode', async () => {
+  it('setMockMode stays disabled outside UI demo mode', async () => {
     const { useAppStore } = await import('../store/index');
-    const initial = useAppStore.getState().isMockMode;
-    useAppStore.getState().setMockMode(!initial);
-    expect(useAppStore.getState().isMockMode).toBe(!initial);
+    useAppStore.getState().setMockMode(true);
+    expect(useAppStore.getState().isUiDemoMode).toBe(false);
+    expect(useAppStore.getState().isMockMode).toBe(false);
   });
 });
 
 describe('SettingsPage', () => {
-  it('loads and displays current settings', async () => {
+  it('loads bootstrap settings view', async () => {
     const SettingsPage = (await import('../features/settings/SettingsPage')).default;
     renderWithQuery(<SettingsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/режим торговли/i)).toBeTruthy();
+      expect(screen.getByText(/runtime и рынок/i)).toBeInTheDocument();
     });
   });
 
   it('save button triggers PUT to /api/v1/settings', async () => {
     let putCalled = false;
     server.use(
-      http.put('/api/v1/settings', async ({ request }) => {
+      http.put('/api/v1/settings', async ({ request }: any) => {
         putCalled = true;
         const body = await request.json();
         return HttpResponse.json({ ...mockSettings, ...(body as object) });
@@ -59,18 +59,31 @@ describe('SettingsPage', () => {
 
     const SettingsPage = (await import('../features/settings/SettingsPage')).default;
     renderWithQuery(<SettingsPage />);
-    await waitFor(() => screen.getByText(/сохранить конфигурацию/i));
-    fireEvent.click(screen.getByText(/сохранить конфигурацию/i));
+    await waitFor(() => expect(screen.getByText(/^сохранить$/i)).not.toBeDisabled());
+    fireEvent.click(screen.getByText(/^сохранить$/i));
     await waitFor(() => expect(putCalled).toBe(true));
   });
 
-  it('confirm modal appears when toggling bot', async () => {
+  it('telegram tab shows token field and sends test message', async () => {
+    let testSendCalled = false;
+    server.use(
+      http.post('/api/v1/settings/telegram/test-send', () => {
+        testSendCalled = true;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+
     const SettingsPage = (await import('../features/settings/SettingsPage')).default;
     renderWithQuery(<SettingsPage />);
-    await waitFor(() => screen.getByText(/запустить бота|остановить бота/i));
-    fireEvent.click(screen.getByText(/запустить бота|остановить бота/i));
+    await waitFor(() => screen.getByRole('button', { name: 'Telegram' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Telegram' }));
+
     await waitFor(() => {
-      expect(screen.getByText(/запустить бота\?|остановить бота\?/i)).toBeTruthy();
+      expect(screen.getByTestId('telegram-bot-token')).toBeInTheDocument();
+      expect(screen.getByTestId('telegram-chat-id')).toBeInTheDocument();
     });
+
+    fireEvent.click(screen.getByRole('button', { name: /отправить тестовое сообщение/i }));
+    await waitFor(() => expect(testSendCalled).toBe(true));
   });
 });

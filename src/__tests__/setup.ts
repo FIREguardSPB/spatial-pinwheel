@@ -1,3 +1,4 @@
+import '@testing-library/jest-dom/vitest';
 /**
  * P7-04: Global Vitest setup.
  * Initialises MSW server for all tests.

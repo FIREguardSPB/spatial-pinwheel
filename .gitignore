@@ -1,30 +1,34 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
-
-# P1-02: Secrets — never commit real .env
+# secrets
 .env
-.env.production
-.env.staging
-backend/.env
+.env.*
+!.env.example
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# node/python deps
+node_modules/
+backend/.venv/
+backend/trading_bot_backend.egg-info/
+
+# caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.vite/
+.cache/
+
+# build/runtime artifacts
+dist/
+coverage/
+htmlcov/
+backend/runtime/
+*.log
+npm_install.log
+
+# local backups and generated archives
+backups/*.tar.gz
+backups/*.zip
+
+# IDE/system
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+.vscode/
+.idea/

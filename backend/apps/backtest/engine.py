@@ -62,6 +62,7 @@ class BacktestResult:
     equity_curve: list[dict]    # [{ts, equity}]
     trades: list[dict]          # lightweight trade list
     settings_used: dict[str, Any] = field(default_factory=dict)
+    walk_forward: dict[str, Any] | None = None
 
 
 class BacktestEngine:
@@ -211,6 +212,141 @@ class BacktestEngine:
             equity_curve=equity_curve,
         )
 
+    def _validation_score(self, result: BacktestResult) -> float:
+        trade_quality = min(2.5, float(result.total_trades or 0) / 6.0)
+        return (
+            float(result.total_return_pct or 0.0) * 0.32
+            + float(result.win_rate or 0.0) * 0.28
+            + float(result.profit_factor or 0.0) * 22.0
+            - float(result.max_drawdown_pct or 0.0) * 0.20
+            + trade_quality
+        )
+
+    def run_walk_forward(self, instrument_id: str, candles: list[dict], *, strategies: list[BaseStrategy], folds: int = 4) -> dict[str, Any]:
+        if len(candles) < 320:
+            raise ValueError('Need at least 320 candles for walk-forward validation')
+        if not strategies:
+            raise ValueError('Need at least one strategy for walk-forward validation')
+
+        test_len = max(80, min(240, len(candles) // (folds + 2)))
+        min_train = max(200, test_len * 2)
+        results: list[dict[str, Any]] = []
+        train_leaderboard: dict[str, list[float]] = {s.name: [] for s in strategies}
+        oos_leaderboard: dict[str, list[float]] = {s.name: [] for s in strategies}
+        selected_counter: dict[str, int] = {s.name: 0 for s in strategies}
+
+        for fold_idx in range(folds):
+            train_end = min_train + fold_idx * test_len
+            test_start = train_end
+            test_end = min(len(candles), test_start + test_len)
+            if test_end - test_start < 60:
+                break
+            train_slice = candles[:train_end]
+            test_slice = candles[test_start:test_end]
+            train_scores: list[dict[str, Any]] = []
+            selected_strategy: BaseStrategy | None = None
+            selected_train_score = float('-inf')
+
+            for strategy in strategies:
+                if len(train_slice) < strategy.lookback + 10 or len(test_slice) < strategy.lookback + 10:
+                    continue
+                train_engine = BacktestEngine(
+                    strategy=strategy,
+                    settings=self.settings,
+                    initial_balance=self.initial_balance,
+                    risk_pct=self.risk_pct,
+                    commission_pct=self.commission_pct * 100,
+                    max_open=self.max_open,
+                    use_decision_engine=self.use_de,
+                )
+                train_res = train_engine.run(instrument_id, train_slice)
+                train_score = self._validation_score(train_res)
+                train_leaderboard[strategy.name].append(train_score)
+                candidate = {
+                    'strategy': strategy.name,
+                    'train_score': round(train_score, 4),
+                    'train_total_return_pct': train_res.total_return_pct,
+                    'train_win_rate': train_res.win_rate,
+                    'train_profit_factor': train_res.profit_factor,
+                    'train_max_drawdown_pct': train_res.max_drawdown_pct,
+                    'train_total_trades': train_res.total_trades,
+                }
+                train_scores.append(candidate)
+                if train_score > selected_train_score:
+                    selected_train_score = train_score
+                    selected_strategy = strategy
+
+            if not train_scores or selected_strategy is None:
+                continue
+
+            train_scores.sort(key=lambda item: item['train_score'], reverse=True)
+            selected_counter[selected_strategy.name] = selected_counter.get(selected_strategy.name, 0) + 1
+            test_engine = BacktestEngine(
+                strategy=selected_strategy,
+                settings=self.settings,
+                initial_balance=self.initial_balance,
+                risk_pct=self.risk_pct,
+                commission_pct=self.commission_pct * 100,
+                max_open=self.max_open,
+                use_decision_engine=self.use_de,
+            )
+            oos_res = test_engine.run(instrument_id, test_slice)
+            oos_score = self._validation_score(oos_res)
+            oos_leaderboard[selected_strategy.name].append(oos_score)
+            results.append({
+                'fold': fold_idx + 1,
+                'train_from_ts': int(train_slice[0].get('time', 0)),
+                'train_to_ts': int(train_slice[-1].get('time', 0)),
+                'test_from_ts': int(test_slice[0].get('time', 0)),
+                'test_to_ts': int(test_slice[-1].get('time', 0)),
+                'selected_strategy': selected_strategy.name,
+                'train_scores': train_scores,
+                'out_of_sample': {
+                    'strategy': selected_strategy.name,
+                    'validation_score': round(oos_score, 4),
+                    'total_return_pct': oos_res.total_return_pct,
+                    'win_rate': oos_res.win_rate,
+                    'profit_factor': oos_res.profit_factor,
+                    'max_drawdown_pct': oos_res.max_drawdown_pct,
+                    'total_trades': oos_res.total_trades,
+                    'avg_trade_pct': oos_res.avg_trade_pct,
+                },
+            })
+
+        aggregate = []
+        for strategy in strategies:
+            name = strategy.name
+            train_values = train_leaderboard.get(name, [])
+            oos_values = oos_leaderboard.get(name, [])
+            selected = selected_counter.get(name, 0)
+            if not train_values and not oos_values and selected == 0:
+                continue
+            avg_train = sum(train_values) / len(train_values) if train_values else 0.0
+            std_train = math.sqrt(sum((v - avg_train) ** 2 for v in train_values) / len(train_values)) if len(train_values) > 1 else 0.0
+            avg_oos = sum(oos_values) / len(oos_values) if oos_values else 0.0
+            std_oos = math.sqrt(sum((v - avg_oos) ** 2 for v in oos_values) / len(oos_values)) if len(oos_values) > 1 else 0.0
+            aggregate.append({
+                'strategy': name,
+                'avg_train_score': round(avg_train, 4),
+                'train_std_score': round(std_train, 4),
+                'avg_oos_score': round(avg_oos, 4),
+                'oos_std_score': round(std_oos, 4),
+                'robust_oos_score': round(avg_oos - std_oos * 0.8, 4),
+                'folds_selected': int(selected),
+                'train_folds': len(train_values),
+                'oos_folds': len(oos_values),
+            })
+        aggregate.sort(key=lambda item: (item['robust_oos_score'], item['avg_oos_score'], item['folds_selected']), reverse=True)
+        return {
+            'mode': 'walk_forward',
+            'folds': results,
+            'strategy_rankings': aggregate,
+            'best_strategy': aggregate[0]['strategy'] if aggregate else None,
+            'fold_count': len(results),
+            'test_window_bars': test_len,
+            'selection_mode': 'expanding_train_pick_best_then_oos',
+        }
+
     def _run_de(self, sig: dict, candles: list[dict]) -> Optional[dict]:
         """Run DecisionEngine on signal. Return sig if TAKE, None otherwise."""
         try:
@@ -316,4 +452,5 @@ class BacktestEngine:
             avg_trade_pct   = avg_trade_pct,
             equity_curve    = equity_curve,
             trades          = trades_light,
+            walk_forward    = None,
         )

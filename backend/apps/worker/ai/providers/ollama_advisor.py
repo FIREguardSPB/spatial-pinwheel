@@ -12,6 +12,8 @@ import logging
 
 import httpx
 
+from core.utils.http_client import make_async_client
+
 from apps.worker.ai.base import AIAdvisor
 from apps.worker.ai.prompts import SYSTEM_PROMPT, build_user_prompt, parse_xml_response
 from apps.worker.ai.types import AIContext, AIResult
@@ -44,7 +46,7 @@ class OllamaAdvisor(AIAdvisor):
         url = f"{self.base_url}/api/generate"
         chunks: list[str] = []
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with make_async_client(timeout=60.0) as client:
             async with client.stream("POST", url, json=payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():

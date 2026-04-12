@@ -3,7 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { server } from './setup';
 import { http, HttpResponse } from 'msw';
-import { mockSignals, mockSettings } from '../mocks/handlers';
+import { mockSettings } from '../mocks/handlers';
 import type { ReactNode } from 'react';
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -29,11 +29,13 @@ describe('useSignals', () => {
     expect(result.current.data![0]).toHaveProperty('instrument_id');
   });
 
-  it('sets isError on fetch failure', async () => {
+  it('falls back to empty array on fetch failure', async () => {
     server.use(http.get('/api/v1/signals', () => HttpResponse.json({ error: 'Server error' }, { status: 500 })));
     const { useSignals } = await import('../features/signals/hooks');
     const { result } = renderHook(() => useSignals(), { wrapper });
-    await waitFor(() => expect(result.current.isError).toBe(true));
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual([]);
+    expect(result.current.isError).toBe(false);
   });
 });
 
@@ -58,7 +60,7 @@ describe('useSettings', () => {
     const { useSettings } = await import('../features/settings/hooks');
     const { result } = renderHook(() => useSettings(), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toMatchObject({ trade_mode: 'auto_paper', risk_per_trade_pct: 1 });
+    expect(result.current.data).toMatchObject({ trade_mode: mockSettings.trade_mode, risk_per_trade_pct: mockSettings.risk_per_trade_pct });
   });
 
   it('settings has required fields', async () => {
@@ -76,7 +78,7 @@ describe('useUpdateSettings', () => {
   it('sends PUT request with updated values', async () => {
     let capturedBody: any = null;
     server.use(
-      http.put('/api/v1/settings', async ({ request }) => {
+      http.put('/api/v1/settings', async ({ request }: any) => {
         capturedBody = await request.json();
         return HttpResponse.json({ ...mockSettings, ...(capturedBody as object) });
       }),

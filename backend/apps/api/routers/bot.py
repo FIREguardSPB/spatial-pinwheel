@@ -7,7 +7,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from apps.api.deps import verify_token
-from apps.api.status import build_bot_status, live_capable, normalize_trade_mode
+from apps.api.status import build_bot_status, live_capable_for, normalize_trade_mode
+from core.services.runtime_tokens import load_runtime_tokens
+from core.storage.repos import settings as settings_repo
 from core.storage.models import Settings
 from core.storage.session import get_db
 
@@ -25,13 +27,14 @@ async def get_bot_status(db: Session = Depends(get_db)):
 
 @router.post("/start")
 async def start_bot(payload: StartBotPayload | None = None, db: Session = Depends(get_db)):
-    settings = db.query(Settings).first()
+    settings = settings_repo.get_settings(db)
     if not settings:
         settings = Settings()
         db.add(settings)
 
     requested_mode = normalize_trade_mode(getattr(payload, "mode", None) or settings.trade_mode)
-    if requested_mode == "auto_live" and not live_capable():
+    token_map = load_runtime_tokens(db, ["TBANK_TOKEN", "TBANK_ACCOUNT_ID"])
+    if requested_mode == "auto_live" and not live_capable_for(settings, token_map):
         raise HTTPException(
             status_code=422,
             detail="Auto Live requires BROKER_PROVIDER=tbank, TBANK_TOKEN, TBANK_ACCOUNT_ID and LIVE_TRADING_ENABLED=true",
@@ -48,7 +51,7 @@ async def start_bot(payload: StartBotPayload | None = None, db: Session = Depend
 
 @router.post("/stop")
 async def stop_bot(db: Session = Depends(get_db)):
-    settings = db.query(Settings).first()
+    settings = settings_repo.get_settings(db)
     if not settings:
         settings = Settings()
         db.add(settings)

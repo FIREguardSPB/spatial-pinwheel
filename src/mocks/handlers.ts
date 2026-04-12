@@ -25,21 +25,36 @@ export const mockSignals = [
 
 export const mockSettings = {
   risk_profile: 'balanced',
-  risk_per_trade_pct: 1,
-  daily_loss_limit_pct: 2,
-  max_concurrent_positions: 2,
-  max_trades_per_day: 8,
-  rr_target: 1.5,
-  time_stop_bars: 6,
-  close_before_session_end_minutes: 10,
-  cooldown_after_losses: { losses: 2, minutes: 60 },
+  risk_per_trade_pct: 0.25,
+  daily_loss_limit_pct: 1.5,
+  max_concurrent_positions: 4,
+  max_trades_per_day: 120,
+  fees_bps: 3,
+  slippage_bps: 5,
+  max_position_notional_pct_balance: 10,
+  max_total_exposure_pct_balance: 35,
+  signal_reentry_cooldown_sec: 30,
+  rr_target: 1.4,
+  time_stop_bars: 12,
+  close_before_session_end_minutes: 5,
+  cooldown_after_losses: { losses: 2, minutes: 30 },
   decision_threshold: 70,
   rr_min: 1.5,
-  ai_mode: 'off',
-  ai_min_confidence: 70,
-  ai_primary_provider: 'claude',
+  ai_mode: 'advisory',
+  ai_min_confidence: 55,
+  ai_primary_provider: 'deepseek',
   ai_fallback_providers: 'deepseek,ollama,skip',
   ollama_url: 'http://localhost:11434',
+  ai_override_policy: 'promote_only',
+  min_sl_distance_pct: 0.08,
+  min_profit_after_costs_multiplier: 1.25,
+  min_trade_value_rub: 10,
+  min_instrument_price_rub: 0.001,
+  trading_session: 'all',
+  use_broker_trading_schedule: true,
+  trading_schedule_exchange: '',
+  correlation_threshold: 0.8,
+  max_correlated_positions: 2,
   notification_events: 'signal_created,trade_executed',
   account_balance: 100000,
   trade_mode: 'auto_paper',
@@ -52,8 +67,31 @@ export const mockBotStatus = {
   is_paper: true,
   active_instrument_id: '',
   connection: { market_data: 'connected', broker: 'connected' },
+  session: {
+    market: 'MOEX',
+    timezone: 'Europe/Moscow',
+    trading_day: '2026-03-18',
+    source: 'broker',
+    is_open: true,
+    current_session_start: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    current_session_end: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    next_open: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  },
   warnings: [],
   capabilities: { manual_review: true, auto_paper: true, auto_live: true },
+};
+
+export const mockTradingSchedule = {
+  source: 'broker',
+  exchange: 'MOEX',
+  trading_day: '2026-03-18',
+  is_trading_day: true,
+  is_open: true,
+  current_session_start: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+  current_session_end: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  next_open: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  error: null,
+  timezone: 'Europe/Moscow',
 };
 
 export const mockDailyStats = {
@@ -64,7 +102,6 @@ export const mockDailyStats = {
   worst_trade: -30,
   open_positions: 1,
 };
-
 
 export const mockTBankAdmin = {
   available: true,
@@ -95,16 +132,53 @@ export const mockWatchlist = [
   { instrument_id: 'TQBR:SBER', ticker: 'SBER', name: 'Сбербанк', exchange: 'TQBR', is_active: true, added_ts: Date.now() - 86400_000 },
 ];
 
+const mockUiRuntime = {
+  bot_status: mockBotStatus,
+  worker_status: { ok: true, phase: 'idle', pid: 12345, current_instrument_count: mockWatchlist.length },
+  settings: {
+    ...mockSettings,
+    telegram_bot_token: '',
+    telegram_chat_id: '',
+    notification_events: 'signal_created,trade_executed,sl_hit,tp_hit',
+  },
+  schedule: {
+    ...mockTradingSchedule,
+    warning: null,
+  },
+  watchlist: mockWatchlist,
+  runtime_overview: {
+    effective_plan: { instrument_id: 'TQBR:SBER', scope: 'symbol' },
+    symbol_profile: { instrument_id: 'TQBR:SBER', sector: 'banks' },
+    diagnostics: { score: 72 },
+    event_regime: { state: 'normal' },
+    source_notes: ['mock ui runtime'],
+  },
+  ai_runtime: { provider: 'deepseek', status: 'ok' },
+  telegram: { status: 'idle', configured: false },
+  auto_policy: { status: 'active', state: 'active' },
+  ml_runtime: { status: 'ready', active_models: {} },
+  pipeline_counters: { signals_seen: 1 },
+};
+
 export const handlers = [
   http.get('/api/v1/signals', () => HttpResponse.json({ items: mockSignals })),
   http.post('/api/v1/signals/:id/approve', () => HttpResponse.json({ status: 'ok' })),
   http.post('/api/v1/signals/:id/reject', () => HttpResponse.json({ status: 'ok' })),
 
   http.get('/api/v1/settings', () => HttpResponse.json(mockSettings)),
-  http.put('/api/v1/settings', async ({ request }) => {
+  http.get('/api/v1/ui/settings', () => HttpResponse.json({ runtime: mockUiRuntime })),
+  http.get('/api/v1/ui/runtime', () => HttpResponse.json(mockUiRuntime)),
+  http.get('/api/v1/ui/signals', () => HttpResponse.json({ items: mockSignals, summary: { visible_count: mockSignals.length, total: mockSignals.length, take: 1, ai_affected: 0, ml_seen: 0 } })),
+  http.get('/api/v1/settings/runtime-overview', () => HttpResponse.json(mockUiRuntime.runtime_overview)),
+  http.get('/api/v1/symbol-profiles/:id', () => HttpResponse.json({ profile: mockUiRuntime.runtime_overview.symbol_profile, current_plan: mockUiRuntime.runtime_overview.effective_plan, diagnostics: mockUiRuntime.runtime_overview.diagnostics })),
+  http.get('/api/v1/event-regimes', () => HttpResponse.json({ items: [mockUiRuntime.runtime_overview.event_regime] })),
+  http.put('/api/v1/settings', async ({ request }: any) => {
     const body = await request.json();
     return HttpResponse.json({ ...mockSettings, ...(body as object) });
   }),
+  http.get('/api/v1/settings/trading-schedule', () => HttpResponse.json(mockTradingSchedule)),
+  http.post('/api/v1/settings/trading-schedule/sync', () => HttpResponse.json(mockTradingSchedule)),
+  http.post('/api/v1/settings/telegram/test-send', () => HttpResponse.json({ ok: true })),
 
   http.get('/api/v1/bot/status', () => HttpResponse.json(mockBotStatus)),
   http.post('/api/v1/bot/start', () => HttpResponse.json({ ...mockBotStatus, is_running: true })),
@@ -115,7 +189,7 @@ export const handlers = [
   http.get('/api/v1/account/summary', () => HttpResponse.json({ mode: 'tbank', balance: 100000, equity: 100125.5, open_pnl: -42.3, day_pnl: 125.5, total_pnl: 2345.1, open_positions: 1, max_drawdown_pct: 4.2, broker_info: { name: 'T-Bank Invest', type: 'broker', status: 'active' } })),
   http.get('/api/v1/account/history', () => HttpResponse.json({ points: [{ ts: Date.now() - 86400_000 * 3, balance: 100000, equity: 100000, day_pnl: 0 }, { ts: Date.now(), balance: 100000, equity: 100125.5, day_pnl: 125.5 }] })),
   http.get('/api/v1/account/tbank/accounts', () => HttpResponse.json(mockTBankAdmin)),
-  http.post('/api/v1/account/tbank/select-account', async ({ request }) => {
+  http.post('/api/v1/account/tbank/select-account', async ({ request }: any) => {
     const body = await request.json() as { account_id: string };
     return HttpResponse.json({ ok: true, selected_account_id: body.account_id });
   }),
@@ -128,13 +202,14 @@ export const handlers = [
   http.get('/api/v1/trades/stats', () => HttpResponse.json({ total_trades: 3, win_rate: 66.7, total_pnl: 125.5 })),
 
   http.get('/api/v1/watchlist', () => HttpResponse.json({ items: mockWatchlist })),
-  http.post('/api/v1/watchlist', async ({ request }) => {
+  http.get('/api/v1/worker/status', () => HttpResponse.json({ ok: true, phase: 'idle', current_instrument_count: mockWatchlist.length })),
+  http.post('/api/v1/watchlist', async ({ request }: any) => {
     const body = await request.json() as { instrument_id: string; ticker?: string; name?: string; exchange?: string };
     return HttpResponse.json({ ok: true, instrument_id: body.instrument_id });
   }),
-  http.delete('/api/v1/watchlist/:id', ({ params }) => HttpResponse.json({ deleted: params.id })),
+  http.delete('/api/v1/watchlist/:id', ({ params }: any) => HttpResponse.json({ deleted: params.id })),
 
-  http.get('/api/v1/instruments/search', ({ request }) => {
+  http.get('/api/v1/instruments/search', ({ request }: any) => {
     const url = new URL(request.url);
     const query = url.searchParams.get('q')?.toLowerCase() ?? '';
     const all = [
@@ -145,7 +220,7 @@ export const handlers = [
   }),
 
   http.get('/api/v1/ai/stats', () => HttpResponse.json({ total: 0, providers: [] })),
-  http.post('/api/v1/backtest', async ({ request }) => {
+  http.post('/api/v1/backtest', async ({ request }: any) => {
     const body = await request.json() as Record<string, unknown>;
     return HttpResponse.json({
       strategy_name: body?.strategy ?? 'breakout',

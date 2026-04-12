@@ -13,7 +13,7 @@ def safe_migrate_settings():
         ("atr_stop_hard_min", "REAL DEFAULT 0.6"),
         ("atr_stop_hard_max", "REAL DEFAULT 2.5"),
         ("atr_stop_soft_min", "REAL DEFAULT 0.8"),
-        ("atr_stop_soft_max", "REAL DEFAULT 2.0"),
+        ("atr_stop_soft_max", "REAL DEFAULT 2.5"),
         ("rr_min", "REAL DEFAULT 1.5"),
         ("decision_threshold", "INTEGER DEFAULT 70"),
         ("w_regime", "INTEGER DEFAULT 20"),

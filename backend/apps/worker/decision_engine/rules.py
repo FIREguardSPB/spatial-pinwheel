@@ -186,7 +186,7 @@ def score_volatility(
             Reason(
                 code=ReasonCode.VOLATILITY_SANITY_BAD,
                 severity=Severity.WARN,
-                msg=f"Stop distance suspicious ({sl_atr:.2f} ATR)",
+                msg=f"Stop distance suspicious ({sl_atr:.2f} ATR; expected {min_soft:.2f}-{max_soft:.2f})",
             )
         )
 
@@ -290,102 +290,132 @@ def score_levels(
     entry: float, tp: float, nearest_level: Optional[float], side: str, max_score: int = 20
 ) -> tuple[int, list[Reason]]:
     """
-    Level Clearance (0..max_score).
-    If nearest_level is None (not found) -> Neutral score (max/2) + LEVEL_UNKNOWN (P0 Fix)
-    Ratio = dist_to_level / tp_distance
-    >= 0.7 OK
-    Note: 'side' param reserved for future asymmetry logic (e.g. Support vs Resistance bias).
+    Level clearance score (0..max_score).
+
+    The ratio here is **not** the ATR stop ratio. It is the share of the TP path
+    available before the nearest opposing level is reached.
     """
     if nearest_level is None:
         return int(max_score / 2), [
             Reason(
                 code=ReasonCode.LEVEL_UNKNOWN,
                 severity=Severity.INFO,
-                msg="No level found in window",
+                msg="No opposing level found in lookback window",
             )
         ]
 
-    score = 0
-    reasons = []
-
     tp_dist = abs(entry - tp)
+    if tp_dist <= 1e-9:
+        return 0, [
+            Reason(
+                code=ReasonCode.LEVEL_UNKNOWN,
+                severity=Severity.WARN,
+                msg="TP distance is zero — cannot score level clearance",
+            )
+        ]
+
     level_dist = abs(entry - nearest_level)
+    ratio_raw = level_dist / tp_dist
+    ratio_clamped = max(0.0, min(ratio_raw, 1.0))
+    ratio_display = max(round(ratio_raw, 2), 0.01) if ratio_raw > 0 else 0.0
+    score = int(max_score * ratio_clamped)
 
-    # Logic: If level is closer than TP, we might hit it first.
-    # We simplified in v1 spec: clearance_ratio = dist_to_level / tp_distance
-    if tp_dist == 0:
-        return 0, []
-
-    ratio = level_dist / tp_dist
-
-    # P0.6 Normalization: Clamp ratio to 1.0 max to strictly respect max_score
-    ratio = max(0.0, min(ratio, 1.0))
-
-    # Formula A: Strict Linear Scoring
-    # Ratio 1.0 -> 100% score. Ratio 0.5 -> 50% score.
-    score = int(max_score * ratio)
-
-    if ratio >= 0.7:
-        reasons.append(
+    level_name = 'resistance' if side == 'BUY' else 'support'
+    if ratio_clamped >= 0.7:
+        return score, [
             Reason(
                 code=ReasonCode.LEVEL_CLEARANCE_OK,
                 severity=Severity.INFO,
-                msg=f"Room to move (Ratio {ratio:.2f})",
+                msg=f"Nearest {level_name} leaves room ({ratio_display:.2f} of TP path)",
             )
+        ]
+
+    return score, [
+        Reason(
+            code=ReasonCode.LEVEL_TOO_CLOSE,
+            severity=Severity.WARN,
+            msg=f"Nearest {level_name} too close ({ratio_display:.2f} of TP path)",
         )
-    else:
-        reasons.append(
-            Reason(
-                code=ReasonCode.LEVEL_TOO_CLOSE,
-                severity=Severity.WARN,
-                msg=f"Level too close (Ratio {ratio:.2f})",
-            )
-        )
-
-    return score, reasons
+    ]
 
 
-def score_costs(
-    entry: float, sl: float, tp: float, fees_bps: int, slippage_bps: int, max_score: int = 15
-) -> tuple[int, list[Reason]]:
-    """
-    Costs (0..max_score)
-    RR after costs >= 1.5 (or target) -> max_score
-    """
-    score = 0
-    reasons = []
-
-    # Convert bps to multiplier
+def analyze_costs(entry: float, sl: float, tp: float, fees_bps: int, slippage_bps: int) -> dict:
+    """Return cost / RR breakdown used both for scoring and diagnostics."""
     fee_pct = fees_bps / 10000.0
     slip_pct = slippage_bps / 10000.0
     total_cost_pct = fee_pct + slip_pct
 
-    # Cost in price terms (approx)
-    cost_price = entry * total_cost_pct
-
     raw_profit = abs(tp - entry)
     raw_loss = abs(entry - sl)
+    round_trip_cost = entry * total_cost_pct * 2.0
+    net_profit = raw_profit - round_trip_cost
+    net_loss = raw_loss + round_trip_cost
 
-    net_profit = raw_profit - (cost_price * 2)  # Entry + Exit
-    net_loss = raw_loss + (cost_price * 2)
+    gross_rr = (raw_profit / raw_loss) if raw_loss > 0 else None
+    net_rr = (net_profit / net_loss) if net_loss > 0 else None
 
-    if net_loss <= 0:
+    return {
+        "fee_pct": fee_pct,
+        "slip_pct": slip_pct,
+        "cost_pct_total": total_cost_pct,
+        "round_trip_cost": round_trip_cost,
+        "raw_profit": raw_profit,
+        "raw_loss": raw_loss,
+        "net_profit": net_profit,
+        "net_loss": net_loss,
+        "gross_rr": gross_rr,
+        "net_rr": net_rr,
+    }
+
+
+def score_costs(
+    entry: float, sl: float, tp: float, fees_bps: int, slippage_bps: int, max_score: int = 15
+) -> tuple[int, list[Reason], dict]:
+    """
+    Costs (0..max_score)
+    RR after costs >= 1.5 -> max_score.
+    Returns (score, reasons, breakdown).
+    """
+    score = 0
+    reasons = []
+    breakdown = analyze_costs(entry, sl, tp, fees_bps, slippage_bps)
+
+    net_rr = breakdown["net_rr"]
+    net_profit = breakdown["net_profit"]
+    net_loss = breakdown["net_loss"]
+
+    if net_loss is None or net_loss <= 0:
         return 0, [
             Reason(code=ReasonCode.COSTS_TOO_HIGH, severity=Severity.BLOCK, msg="Costs exceed risk")
-        ]
+        ], breakdown
 
-    rr = net_profit / net_loss
+    if net_rr is None:
+        return 0, [
+            Reason(code=ReasonCode.COSTS_TOO_HIGH, severity=Severity.WARN, msg="Net RR unavailable")
+        ], breakdown
 
-    if rr >= 1.5:  # Using hardcoded 1.5 as min acceptable for full score in v1, or pass targets
+    if net_profit <= 0 or net_rr <= 0:
+        reasons.append(
+            Reason(
+                code=ReasonCode.COSTS_TOO_HIGH,
+                severity=Severity.WARN,
+                msg=f"Net RR {net_rr:.2f} Non-positive after costs",
+            )
+        )
+        return 0, reasons, breakdown
+
+    if net_rr >= 1.5:
         score = max_score
         reasons.append(
-            Reason(code=ReasonCode.COSTS_OK, severity=Severity.INFO, msg=f"Net RR {rr:.2f} OK")
+            Reason(code=ReasonCode.COSTS_OK, severity=Severity.INFO, msg=f"Net RR {net_rr:.2f} OK")
         )
-    elif rr > 1.0:
+    elif net_rr >= 1.0:
         score = int(max_score / 3)
         reasons.append(
             Reason(
-                code=ReasonCode.COSTS_TOO_HIGH, severity=Severity.WARN, msg=f"Net RR {rr:.2f} Low"
+                code=ReasonCode.COSTS_TOO_HIGH,
+                severity=Severity.WARN,
+                msg=f"Net RR {net_rr:.2f} Below target after costs",
             )
         )
     else:
@@ -394,11 +424,11 @@ def score_costs(
             Reason(
                 code=ReasonCode.COSTS_TOO_HIGH,
                 severity=Severity.WARN,
-                msg=f"Net RR {rr:.2f} Negative Exp",
+                msg=f"Net RR {net_rr:.2f} Sub-1 after costs",
             )
         )
 
-    return score, reasons
+    return score, reasons, breakdown
 
 
 # ─── P5-02: Volume Filter ─────────────────────────────────────────────────────
@@ -407,15 +437,17 @@ def score_volume(
     volume_ratio: float,
     max_score: int = 10,
     min_ratio: float = 0.5,
-    anomalous_ratio: float = 3.0,
+    anomalous_ratio: float = 8.0,
+    extreme_ratio: float = 20.0,
 ) -> tuple[int, "Reason"]:
     """
     Volume-based score.
     Returns (score, reason).
 
-    < 0.5  → BLOCK  (dead market — no liquidity)
-    > 3.0  → WARN   (anomalous spike — spread risk)
-    else   → full score
+    < min_ratio       → BLOCK (dead market)
+    > extreme_ratio   → WARN  (extreme spike)
+    > anomalous_ratio → WARN  (anomalous spike)
+    else              → OK
     """
     if volume_ratio is None:
         half = max_score // 2
@@ -430,12 +462,19 @@ def score_volume(
             severity=Severity.BLOCK,
             msg=f"Volume too low ({volume_ratio:.2f}x avg) — min {min_ratio:.1f}x",
         )
+    if volume_ratio > extreme_ratio:
+        half = max_score // 2
+        return half, Reason(
+            code=ReasonCode.VOLUME_ANOMALOUS,
+            severity=Severity.WARN,
+            msg=f"Extreme volume spike ({volume_ratio:.2f}x avg; warn ≥ {extreme_ratio:.1f}x)",
+        )
     if volume_ratio > anomalous_ratio:
         half = max_score // 2
         return half, Reason(
             code=ReasonCode.VOLUME_ANOMALOUS,
             severity=Severity.WARN,
-            msg=f"Volume spike ({volume_ratio:.2f}x avg) — possible wide spread",
+            msg=f"Volume spike ({volume_ratio:.2f}x avg; warn ≥ {anomalous_ratio:.1f}x)",
         )
     return max_score, Reason(
         code=ReasonCode.VOLUME_OK,
@@ -449,7 +488,7 @@ def score_volume(
 def check_session(
     no_trade_opening_minutes: int = 10,
     close_before_end_minutes: int = 10,
-    session_type: str = "main",
+    session_type: str = "all",
 ) -> "Optional[Reason]":
     """
     P5-03: Hard-reject if outside trading session or too close to open/close.
@@ -457,11 +496,10 @@ def check_session(
     """
     from core.utils.session import (
         is_trading_session, minutes_until_session_end,
-        _msk_now, MOEX_OPEN,
+        _msk_now, current_session_bounds,
     )
-    from datetime import timedelta
 
-    if not is_trading_session():
+    if not is_trading_session(session_type):
         return Reason(
             code=ReasonCode.SESSION_CLOSED,
             severity=Severity.BLOCK,
@@ -471,10 +509,14 @@ def check_session(
     # Opening gap protection: first N minutes after open
     if no_trade_opening_minutes > 0:
         now_msk = _msk_now()
-        session_open = now_msk.replace(
-            hour=MOEX_OPEN.hour, minute=MOEX_OPEN.minute, second=0, microsecond=0
-        )
-        minutes_since_open = (now_msk - session_open).total_seconds() / 60
+        session_open_t, _session_end_t = current_session_bounds(session_type)
+        if session_open_t is not None:
+            session_open = now_msk.replace(
+                hour=session_open_t.hour, minute=session_open_t.minute, second=0, microsecond=0
+            )
+            minutes_since_open = (now_msk - session_open).total_seconds() / 60
+        else:
+            minutes_since_open = 999999
         if 0 < minutes_since_open < no_trade_opening_minutes:
             return Reason(
                 code=ReasonCode.SESSION_OPENING_GAP,
@@ -484,7 +526,7 @@ def check_session(
 
     # Too close to session end
     if close_before_end_minutes > 0:
-        remaining = minutes_until_session_end()
+        remaining = minutes_until_session_end(session_type)
         if 0 < remaining < close_before_end_minutes:
             return Reason(
                 code=ReasonCode.SESSION_CLOSED,

@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from core.storage.models import Order, Trade, Position, DecisionLog
+from core.storage.decision_log_utils import build_decision_log_row
 from sqlalchemy.exc import IntegrityError
 
 
@@ -23,8 +24,14 @@ def create_order(db: Session, order_data: dict) -> Order:
         raise
 
 
-def list_orders(db: Session, limit: int = 50) -> list[Order]:
-    return db.query(Order).order_by(Order.ts.desc()).limit(limit).all()
+ACTIVE_ORDER_STATUSES = {"NEW", "PENDING", "PARTIALLY_FILLED", "SUBMITTED", "WORKING"}
+
+
+def list_orders(db: Session, limit: int = 50, active_only: bool = False) -> list[Order]:
+    query = db.query(Order)
+    if active_only:
+        query = query.filter(Order.status.in_(ACTIVE_ORDER_STATUSES))
+    return query.order_by(Order.ts.desc()).limit(limit).all()
 
 
 # --- Trades ---
@@ -38,6 +45,15 @@ def create_trade(db: Session, trade_data: dict) -> Trade:
 
 def list_trades(db: Session, limit: int = 50) -> list[Trade]:
     return db.query(Trade).order_by(Trade.ts.desc()).limit(limit).all()
+
+
+def count_trades(db: Session) -> int:
+    return int(db.query(Trade).count())
+
+
+def latest_trade_ts(db: Session) -> int | None:
+    row = db.query(Trade.ts).order_by(Trade.ts.desc()).first()
+    return int(row[0]) if row and row[0] is not None else None
 
 
 # --- Positions ---
@@ -55,12 +71,19 @@ def upsert_position(db: Session, pos_data: dict) -> Position:
 
 
 def list_positions(db: Session) -> list[Position]:
-    return db.query(Position).all()
+    return db.query(Position).filter(Position.qty > 0).order_by(Position.updated_ts.desc()).all()
 
 
 # --- Logs ---
 def append_log(db: Session, log_data: dict) -> DecisionLog:
-    log = DecisionLog(**log_data)
+    row = build_decision_log_row(
+        log_type=log_data.get('type') or 'info',
+        message=log_data.get('message') or '',
+        payload=log_data.get('payload') or {},
+        ts_ms=log_data.get('ts'),
+        log_id=log_data.get('id'),
+    )
+    log = DecisionLog(**row)
     db.add(log)
     db.commit()
     db.refresh(log)

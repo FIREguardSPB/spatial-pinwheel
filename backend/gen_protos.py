@@ -36,12 +36,21 @@ def generate_grpc():
 
     if exit_code == 0:
         print("Success!")
-        # Create __init__.py in all subdirectories of GEN_DIR
+        # Create __init__.py in generated directories except top-level google/ namespace.
+        # google.protobuf lives in site-packages and must stay importable as a namespace package.
         for root, dirs, files in os.walk(GEN_DIR):
+            rel = os.path.relpath(root, GEN_DIR)
+            if rel == "google":
+                continue
             init_file = os.path.join(root, "__init__.py")
             if not os.path.exists(init_file):
                 with open(init_file, "w") as f:
                     f.write("# Generated gRPC code\n")
+
+        conflict_init = os.path.join(GEN_DIR, "google", "__init__.py")
+        if os.path.exists(conflict_init):
+            os.remove(conflict_init)
+            print(f"Removed conflicting namespace stub: {conflict_init}")
     else:
         print("Failed to generate code.")
         exit(1)

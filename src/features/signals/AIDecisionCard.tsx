@@ -114,6 +114,15 @@ export const AIDecisionCard: React.FC<AIDecisionCardProps> = ({
                             </span>
                         </div>
                     )}
+                    {finalDecision && (
+                        <div className="text-xs text-gray-500">
+                            Итог: <span className={clsx('font-bold',
+                                finalDecision === 'TAKE' ? 'text-emerald-400' :
+                                finalDecision === 'REJECT' ? 'text-red-400' : 'text-gray-400')}>
+                                {finalDecision}
+                            </span>
+                        </div>
+                    )}
                     <span className={clsx('px-2 py-0.5 rounded-full text-xs border font-bold', style.pill)}>
                         AI: {style.label}
                         {aiDecision.confidence != null && ` · ${aiDecision.confidence}%`}
@@ -131,7 +140,7 @@ export const AIDecisionCard: React.FC<AIDecisionCardProps> = ({
                     <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
                         <div
                             className={clsx('h-full rounded-full transition-all',
-                                aiDecision.confidence >= 70 ? 'bg-emerald-500' :
+                                aiDecision.confidence >= 60 ? 'bg-emerald-500' :
                                 aiDecision.confidence >= 50 ? 'bg-yellow-500' : 'bg-red-500')}
                             style={{ width: `${aiDecision.confidence}%` }}
                         />

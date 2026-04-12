@@ -1,102 +1,180 @@
-import { create } from 'zustand';
-import { devtools, persist } from 'zustand/middleware';
+import { create } from "zustand";
+import { devtools, persist } from "zustand/middleware";
+
+type ConnectionStatus = "connected" | "disconnected" | "reconnecting";
+type Theme = "dark" | "light";
+
+type BackendHealthStatus = "unknown" | "ok" | "degraded" | "error";
+
+type RuntimeAlert = {
+    message: string;
+    requestId?: string | null;
+    statusCode?: number | null;
+    path?: string | null;
+    ts: number;
+};
+
+type BackendSourcePayload = {
+    sourceLabel: string;
+    brokerProvider: string;
+    brokerSandbox: boolean;
+    isMockMode?: boolean;
+};
 
 interface AppState {
-    // Auth
     authToken: string | null;
     setAuthToken: (token: string | null) => void;
 
-    // Theme
-    theme: 'dark' | 'light';
+    theme: Theme;
     toggleTheme: () => void;
 
-    // Settings
     isUiDemoMode: boolean;
-    isMockMode: boolean; // Server-side mock
+    isMockMode: boolean;
     setMockMode: (isMock: boolean) => void;
 
-    // Connection
-    connectionStatus: 'connected' | 'disconnected' | 'reconnecting';
-    setConnectionStatus: (status: 'connected' | 'disconnected' | 'reconnecting') => void;
+    connectionStatus: ConnectionStatus;
+    setConnectionStatus: (status: ConnectionStatus) => void;
 
-    // Dashboard State
+    backendHealth: BackendHealthStatus;
+    backendMessage: string | null;
+    lastApiError: RuntimeAlert | null;
+    setBackendHealth: (status: BackendHealthStatus, message?: string | null) => void;
+    reportApiError: (payload: Omit<RuntimeAlert, "ts">) => void;
+    clearApiError: () => void;
+
+    sourceLabel: string;
+    brokerProvider: string;
+    brokerSandbox: boolean;
+    setBackendSource: (payload: BackendSourcePayload) => void;
+
     selectedInstrument: string;
     setSelectedInstrument: (symbol: string) => void;
 
     selectedTimeframe: string;
     setSelectedTimeframe: (tf: string) => void;
 
-    // Data Persistence (Client-side cache)
-    candles: Record<string, any[]>; // storing raw objects
+    candles: Record<string, any[]>;
     addCandle: (symbol: string, tf: string, candle: any) => void;
+    replaceCandles: (symbol: string, tf: string, next: any[]) => void;
+    mergeCandles: (symbol: string, tf: string, next: any[]) => void;
+    clearCandles: () => void;
 }
 
 export const useAppStore = create<AppState>()(
     devtools(
         persist(
             (set) => ({
-                authToken: import.meta.env.VITE_API_TOKEN || null, // default from env
+                authToken: import.meta.env.VITE_API_TOKEN || null,
                 setAuthToken: (token) => set({ authToken: token }),
 
-                theme: 'dark' as const,
+                theme: "dark",
                 toggleTheme: () => set((state) => ({
-                    theme: state.theme === 'dark' ? 'light' : 'dark'
+                    theme: state.theme === "dark" ? "light" : "dark",
                 })),
 
-                // Client-Side Demo Mode (Strict)
-                isUiDemoMode: import.meta.env.VITE_UI_DEMO_MODE === 'true',
-                // Backend Mock Mode (Legacy/Server-side) - mostly informational now if UI Demo is off
-                isMockMode: import.meta.env.VITE_USE_MOCK === 'true',
+                isUiDemoMode: import.meta.env.VITE_UI_DEMO_MODE === "true",
+                isMockMode: import.meta.env.VITE_UI_DEMO_MODE === "true",
+                setMockMode: (isMock) => set((state) => ({ isMockMode: state.isUiDemoMode ? isMock : false })),
 
-                setMockMode: (isMock) => set({ isMockMode: isMock }), // Keep for now, but UI Demo is static env usually
-
-                connectionStatus: 'disconnected',
+                connectionStatus: "disconnected",
                 setConnectionStatus: (status) => set({ connectionStatus: status }),
 
-                selectedInstrument: 'TQBR:SBER', // default
+                backendHealth: "unknown",
+                backendMessage: null,
+                lastApiError: null,
+                setBackendHealth: (status, message = null) => set({ backendHealth: status, backendMessage: message }),
+                reportApiError: (payload) => set({
+                    backendHealth: "error",
+                    backendMessage: payload.message,
+                    lastApiError: { ...payload, ts: Date.now() },
+                }),
+                clearApiError: () => set({ lastApiError: null, backendMessage: null }),
+
+                sourceLabel: import.meta.env.VITE_UI_DEMO_MODE === "true" ? "UI DEMO" : "API",
+                brokerProvider: import.meta.env.VITE_UI_DEMO_MODE === "true" ? "mock" : "unknown",
+                brokerSandbox: false,
+                setBackendSource: ({ sourceLabel, brokerProvider, brokerSandbox, isMockMode }) => {
+                    set((state) => ({
+                        sourceLabel,
+                        brokerProvider,
+                        brokerSandbox,
+                        isMockMode: state.isUiDemoMode ? Boolean(isMockMode) : false,
+                    }));
+                },
+
+                selectedInstrument: "TQBR:SBER",
                 setSelectedInstrument: (symbol) => set({ selectedInstrument: symbol }),
 
-                selectedTimeframe: '1m', // default
+                selectedTimeframe: "1m",
                 setSelectedTimeframe: (tf) => set({ selectedTimeframe: tf }),
 
                 candles: {},
                 addCandle: (symbol, tf, candle) => set((state) => {
                     const key = `${symbol}-${tf}`;
                     const current = state.candles[key] || [];
+                    const index = current.findIndex((c) => c.time === candle.time);
 
-                    // 1. Check if exists
-                    const index = current.findIndex(c => c.time === candle.time);
                     if (index !== -1) {
-                        // Update existing
                         const next = [...current];
                         next[index] = candle;
                         return { candles: { ...state.candles, [key]: next } };
                     }
 
-                    // 2. Append and Sort
-                    // Optimization: check if new is newer than last (most common case)
                     const last = current[current.length - 1];
                     if (!last || candle.time > last.time) {
                         return { candles: { ...state.candles, [key]: [...current, candle] } };
                     }
 
-                    // Middle insertion / Unsorted arrival
                     const next = [...current, candle];
                     next.sort((a, b) => a.time - b.time);
                     return { candles: { ...state.candles, [key]: next } };
                 }),
+                replaceCandles: (symbol, tf, next) => set((state) => ({
+                    candles: {
+                        ...state.candles,
+                        [`${symbol}-${tf}`]: [...next].sort((a, b) => a.time - b.time),
+                    },
+                })),
+                mergeCandles: (symbol, tf, next) => set((state) => {
+                    const key = `${symbol}-${tf}`;
+                    const merged = new Map<number, any>();
+                    for (const candle of state.candles[key] || []) {
+                        if (candle && Number.isFinite(Number(candle.time))) {
+                            merged.set(Number(candle.time), candle);
+                        }
+                    }
+                    for (const candle of next || []) {
+                        if (candle && Number.isFinite(Number(candle.time))) {
+                            merged.set(Number(candle.time), candle);
+                        }
+                    }
+                    return {
+                        candles: {
+                            ...state.candles,
+                            [key]: Array.from(merged.values()).sort((a, b) => a.time - b.time),
+                        },
+                    };
+                }),
+                clearCandles: () => set({ candles: {} }),
             }),
             {
-                name: 'app-storage-v2',
+                name: "app-storage-v4",
+                version: 4,
+                migrate: (persistedState: any) => ({
+                    ...(persistedState || {}),
+                    isMockMode: false,
+                    candles: {},
+                }),
                 partialize: (state) => ({
                     authToken: state.authToken,
                     theme: state.theme,
-                    isMockMode: state.isMockMode,
+                    sourceLabel: state.sourceLabel,
+                    brokerProvider: state.brokerProvider,
+                    brokerSandbox: state.brokerSandbox,
                     selectedInstrument: state.selectedInstrument,
                     selectedTimeframe: state.selectedTimeframe,
-                    candles: state.candles, // Persist candles
                 }),
-            }
-        )
-    )
+            },
+        ),
+    ),
 );

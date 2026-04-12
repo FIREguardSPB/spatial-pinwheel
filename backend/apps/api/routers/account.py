@@ -13,6 +13,7 @@ POST /api/v1/account/tbank/pay-in
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -22,14 +23,17 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from apps.api.deps import verify_token
+from apps.api.routers.paper import reset_paper_state
 from apps.broker.tbank.adapter import TBankApiError, TBankGrpcAdapter
 from core.execution.tbank import TBankExecutionEngine
 from core.config import get_token, settings as cfg
+from core.storage.repos import settings as settings_repo
 from core.storage.models import AccountSnapshot, ApiToken, Position, Settings, Trade
 from core.storage.session import get_db
-from core.utils.time import now_ms
+from core.utils.time import now_ms, start_of_day_ms
 
 router = APIRouter(dependencies=[Depends(verify_token)])
+logger = logging.getLogger(__name__)
 
 
 class SelectAccountRequest(BaseModel):
@@ -63,8 +67,7 @@ class BrokerTransferRequest(BaseModel):
 
 
 def _today_ms() -> int:
-    today = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    return int(today.timestamp() * 1000)
+    return start_of_day_ms()
 
 
 async def _get_tbank_adapter() -> TBankGrpcAdapter:
@@ -136,61 +139,76 @@ def _normalize_account(item: dict[str, Any], *, selected_id: str | None = None) 
 
 @router.get("/summary")
 async def account_summary(db: Session = Depends(get_db)):
+    return build_account_summary_sync(db)
+
+
+def build_account_summary_sync(db: Session):
     """
     Account balance + equity overview.
     Paper mode: reads from Settings.account_balance + open positions unrealized PnL.
     Live mode: reads from T-Bank portfolio when available.
     """
-    s = db.query(Settings).first()
+    try:
+        s = settings_repo.get_settings(db)
 
-    trade_mode = getattr(s, "trade_mode", "review") if s else "review"
-    mode = "tbank" if cfg.BROKER_PROVIDER == "tbank" and trade_mode == "auto_live" else cfg.BROKER_PROVIDER
-    balance = float(getattr(s, "account_balance", 100_000) or 100_000)
+        trade_mode = getattr(s, "trade_mode", "review") if s else "review"
+        mode = "tbank" if cfg.BROKER_PROVIDER == "tbank" and trade_mode == "auto_live" else cfg.BROKER_PROVIDER
+        balance = float(getattr(s, "account_balance", 100_000) or 100_000)
 
-    positions = db.query(Position).filter(Position.qty > 0).all()
-    open_pnl = sum(float(p.unrealized_pnl or 0) for p in positions)
-    equity = balance + open_pnl
+        positions = db.query(Position).filter(Position.qty > 0).all()
+        open_pnl = sum(float(p.unrealized_pnl or 0) for p in positions)
+        equity = balance + open_pnl
 
-    if mode == "tbank":
-        try:
-            portfolio = await TBankExecutionEngine(db, token=get_token("TBANK_TOKEN") or cfg.TBANK_TOKEN, account_id=get_token("TBANK_ACCOUNT_ID") or cfg.TBANK_ACCOUNT_ID, sandbox=cfg.TBANK_SANDBOX).get_portfolio()
-            balance = float(portfolio.get("total_amount_currencies", balance) or balance)
-            equity = float(portfolio.get("total_amount_portfolio", equity) or equity)
-            open_pnl = round(equity - balance, 2)
-        except Exception:
-            pass
+        # UI/account snapshot must stay non-blocking. Live portfolio refresh happens in dedicated broker paths.
+        if mode == "tbank":
+            logger.info("Account summary uses cached/local values in UI snapshot mode")
 
-    day_pnl = db.query(func.sum(Position.realized_pnl)).filter(
-        Position.updated_ts >= _today_ms()
-    ).scalar() or 0.0
+        day_pnl = db.query(func.sum(Position.realized_pnl)).filter(
+            Position.updated_ts >= _today_ms()
+        ).scalar() or 0.0
 
-    total_pnl = db.query(func.sum(Position.realized_pnl)).scalar() or 0.0
+        total_pnl = db.query(func.sum(Position.realized_pnl)).scalar() or 0.0
 
-    snapshots = db.query(AccountSnapshot).order_by(AccountSnapshot.ts).limit(5000).all()
-    max_dd = 0.0
-    if snapshots:
-        peak = float(snapshots[0].equity or equity)
-        for snap in snapshots:
-            eq = float(snap.equity or 0)
-            peak = max(peak, eq)
-            dd = (peak - eq) / peak * 100 if peak > 0 else 0
-            max_dd = max(max_dd, dd)
+        snapshots = db.query(AccountSnapshot).order_by(AccountSnapshot.ts).limit(5000).all()
+        max_dd = 0.0
+        if snapshots:
+            peak = float(snapshots[0].equity or equity)
+            for snap in snapshots:
+                eq = float(snap.equity or 0)
+                peak = max(peak, eq)
+                dd = (peak - eq) / peak * 100 if peak > 0 else 0
+                max_dd = max(max_dd, dd)
 
-    return {
-        "mode":            mode,
-        "balance":         round(balance, 2),
-        "equity":          round(equity, 2),
-        "open_pnl":        round(open_pnl, 2),
-        "day_pnl":         round(float(day_pnl), 2),
-        "total_pnl":       round(float(total_pnl), 2),
-        "open_positions":  len(positions),
-        "max_drawdown_pct": round(max_dd, 2),
-        "broker_info": {
-            "name":   "T-Bank Invest" if mode == "tbank" else "Paper Trading",
-            "type":   "broker" if mode == "tbank" else "virtual",
-            "status": "active",
-        },
-    }
+        return {
+            "mode":            mode,
+            "balance":         round(balance, 2),
+            "equity":          round(equity, 2),
+            "open_pnl":        round(open_pnl, 2),
+            "day_pnl":         round(float(day_pnl), 2),
+            "total_pnl":       round(float(total_pnl), 2),
+            "open_positions":  len(positions),
+            "max_drawdown_pct": round(max_dd, 2),
+            "degraded": False,
+            "broker_info": {
+                "name":   "T-Bank Invest" if mode == "tbank" else "Paper Trading",
+                "type":   "broker" if mode == "tbank" else "virtual",
+                "status": "active",
+            },
+        }
+    except Exception as exc:
+        logger.error("Account summary failed", exc_info=exc)
+        return {
+            "mode": cfg.BROKER_PROVIDER,
+            "balance": 0.0,
+            "equity": 0.0,
+            "open_pnl": 0.0,
+            "day_pnl": 0.0,
+            "total_pnl": 0.0,
+            "open_positions": 0,
+            "max_drawdown_pct": 0.0,
+            "degraded": True,
+            "broker_info": {"name": "Unavailable", "type": "unknown", "status": "degraded"},
+        }
 
 
 @router.get("/history")
@@ -198,16 +216,19 @@ async def account_history(
     period_days: int = Query(30, ge=1, le=365),
     db: Session      = Depends(get_db),
 ):
-    from_ts = int((dt.datetime.now() - dt.timedelta(days=period_days)).timestamp() * 1000)
-    snapshots = (
-        db.query(AccountSnapshot)
-        .filter(AccountSnapshot.ts >= from_ts)
-        .order_by(AccountSnapshot.ts)
-        .all()
-    )
-    return {
-        "period_days": period_days,
-        "points": [
+    return build_account_history_sync(db, period_days)
+
+
+def build_account_history_sync(db: Session, period_days: int = 30):
+    try:
+        from_ts = int((dt.datetime.now() - dt.timedelta(days=period_days)).timestamp() * 1000)
+        snapshots = (
+            db.query(AccountSnapshot)
+            .filter(AccountSnapshot.ts >= from_ts)
+            .order_by(AccountSnapshot.ts)
+            .all()
+        )
+        points = [
             {
                 "ts":      snap.ts,
                 "balance": float(snap.balance or 0),
@@ -215,35 +236,70 @@ async def account_history(
                 "day_pnl": float(snap.day_pnl or 0),
             }
             for snap in snapshots
-        ],
-    }
+        ]
+        flat_equity = len({round(float(p.get('equity') or 0), 2) for p in points}) <= 1 if points else True
+        return {
+            "period_days": period_days,
+            "points": points,
+            "meta": {
+                "points_count": len(points),
+                "latest_ts": points[-1]["ts"] if points else None,
+                "flat_equity": flat_equity,
+                "note": "equity has not changed yet" if flat_equity and points else None,
+            },
+        }
+    except Exception as exc:
+        logger.error("Account history failed", exc_info=exc)
+        return {"period_days": period_days, "points": []}
 
 
 @router.get("/daily-stats")
 async def daily_stats(db: Session = Depends(get_db)):
-    today_ms = _today_ms()
-    trades_count = db.query(Trade).filter(Trade.ts >= today_ms).count()
-    closed_today = (
-        db.query(Position)
-        .filter(Position.qty == 0, Position.updated_ts >= today_ms)
-        .all()
-    )
-    pnls = [float(p.realized_pnl or 0) for p in closed_today]
-    wins = [p for p in pnls if p > 0]
+    return build_daily_stats_sync(db)
 
-    open_positions = db.query(Position).filter(Position.qty > 0).count()
 
-    best  = round(max(pnls), 2)  if pnls else 0.0
-    worst = round(min(pnls), 2)  if pnls else 0.0
+def build_daily_stats_sync(db: Session):
+    try:
+        today_ms = _today_ms()
+        trades_count = db.query(Trade).filter(Trade.ts >= today_ms).count()
+        closed_today = (
+            db.query(Position)
+            .filter(Position.qty == 0, Position.updated_ts >= today_ms)
+            .all()
+        )
+        pnls = [float(p.realized_pnl or 0) for p in closed_today]
+        wins = [p for p in pnls if p > 0]
 
-    return {
-        "day_pnl":        round(sum(pnls), 2),
-        "trades_count":   trades_count,
-        "win_rate":       round(len(wins) / len(pnls) * 100, 1) if pnls else 0.0,
-        "best_trade":     best,
-        "worst_trade":    worst,
-        "open_positions": open_positions,
-    }
+        open_positions = db.query(Position).filter(Position.qty > 0).count()
+
+        losses = [p for p in pnls if p < 0]
+        best  = round(max(wins), 2) if wins else 0.0
+        worst = round(min(losses), 2) if losses else 0.0
+
+        return {
+            "day_pnl":        round(sum(pnls), 2),
+            "trades_count":   trades_count,
+            "win_rate":       round(len(wins) / len(pnls) * 100, 1) if pnls else 0.0,
+            "best_trade":     best,
+            "worst_trade":    worst,
+            "wins_count":     len(wins),
+            "losses_count":   len(losses),
+            "open_positions": open_positions,
+            "degraded": False,
+        }
+    except Exception as exc:
+        logger.error("Daily stats failed", exc_info=exc)
+        return {
+            "day_pnl": 0.0,
+            "trades_count": 0,
+            "win_rate": 0.0,
+            "best_trade": 0.0,
+            "worst_trade": 0.0,
+            "wins_count": 0,
+            "losses_count": 0,
+            "open_positions": 0,
+            "degraded": True,
+        }
 
 
 @router.get("/tbank/accounts")
@@ -276,7 +332,29 @@ async def tbank_accounts(db: Session = Depends(get_db)):
             "bank_accounts": [_normalize_account(item) for item in bank_accounts_raw],
         }
     except TBankApiError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("T-Bank accounts fetch failed: %s", exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
+    except Exception as exc:
+        logger.error("Unexpected T-Bank accounts fetch failure", exc_info=exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
 
 
 @router.post("/tbank/select-account")
@@ -285,7 +363,29 @@ async def tbank_select_account(body: SelectAccountRequest, db: Session = Depends
     try:
         resolved = await adapter.resolve_account_id(body.account_id)
     except TBankApiError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("T-Bank accounts fetch failed: %s", exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
+    except Exception as exc:
+        logger.error("Unexpected T-Bank accounts fetch failure", exc_info=exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
 
     _upsert_runtime_secret(
         db,
@@ -307,7 +407,29 @@ async def tbank_open_sandbox_account(body: SandboxOpenAccountRequest, db: Sessio
     try:
         created = await adapter.open_sandbox_account(body.name)
     except TBankApiError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("T-Bank accounts fetch failed: %s", exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
+    except Exception as exc:
+        logger.error("Unexpected T-Bank accounts fetch failure", exc_info=exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
 
     account_id = created.get("accountId") or created.get("account_id")
     if body.activate and account_id:
@@ -339,7 +461,29 @@ async def tbank_sandbox_pay_in(body: SandboxPayInRequest, db: Session = Depends(
     try:
         result = await adapter.sandbox_pay_in(account_id=body.account_id, amount=amount, currency=body.currency)
     except TBankApiError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("T-Bank accounts fetch failed: %s", exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
+    except Exception as exc:
+        logger.error("Unexpected T-Bank accounts fetch failure", exc_info=exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
 
     if body.activate:
         _upsert_runtime_secret(
@@ -377,7 +521,29 @@ async def tbank_pay_in(body: BrokerPayInRequest):
             currency=body.currency,
         )
     except TBankApiError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("T-Bank accounts fetch failed: %s", exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
+    except Exception as exc:
+        logger.error("Unexpected T-Bank accounts fetch failure", exc_info=exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
 
     return {
         "ok": True,
@@ -405,7 +571,29 @@ async def tbank_transfer_between_broker_accounts(body: BrokerTransferRequest):
             currency=body.currency,
         )
     except TBankApiError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("T-Bank accounts fetch failed: %s", exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
+    except Exception as exc:
+        logger.error("Unexpected T-Bank accounts fetch failure", exc_info=exc)
+        return {
+            "available": False,
+            "provider": cfg.BROKER_PROVIDER,
+            "sandbox": cfg.TBANK_SANDBOX,
+            "message": str(exc),
+            "selected_account_id": selected_account_id,
+            "broker_accounts": [],
+            "bank_accounts": [],
+            "degraded": True,
+        }
 
     return {
         "ok": True,
@@ -416,3 +604,8 @@ async def tbank_transfer_between_broker_accounts(body: BrokerTransferRequest):
         "currency": body.currency.upper(),
         "raw": result,
     }
+
+
+@router.post("/paper/reset")
+async def reset_paper_account(db: Session = Depends(get_db)):
+    return await reset_paper_state(db)

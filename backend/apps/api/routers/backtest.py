@@ -10,11 +10,15 @@ import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from apps.backtest.engine import BacktestEngine
 from core.strategy.selector import StrategySelector
 from apps.api.deps import verify_token
+from core.storage.session import get_db
+from core.storage.repos import candles as candle_repo
+from core.storage.repos import settings as settings_repo
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(verify_token)])
@@ -34,11 +38,17 @@ class CandleIn(BaseModel):
 class BacktestRequest(BaseModel):
     instrument_id: str = "TQBR:SBER"
     strategy: str = "breakout"
-    candles: list[CandleIn] = Field(..., min_length=50)
+    candles: list[CandleIn] | None = None
     initial_balance: float = 100_000.0
     risk_pct: float = Field(1.0, ge=0.1, le=10.0)
     commission_pct: float = Field(0.03, ge=0.0, le=1.0)
     use_decision_engine: bool = False   # requires DB Settings; false for pure strategy test
+    timeframe: str = Field("1m")
+    history_limit: int = Field(500, ge=100, le=5000)
+    source: str = Field("cache")
+    mode: str = Field("single")
+    folds: int = Field(4, ge=2, le=8)
+    strategies: list[str] | None = None
 
 
 class BacktestResponse(BaseModel):
@@ -57,10 +67,11 @@ class BacktestResponse(BaseModel):
     avg_trade_pct: float
     equity_curve: list[dict[str, Any]]
     trades: list[dict[str, Any]]
+    walk_forward: dict[str, Any] | None = None
 
 
 @router.post("", response_model=BacktestResponse)
-async def run_backtest(req: BacktestRequest):
+async def run_backtest(req: BacktestRequest, db: Session = Depends(get_db)):
     """
     Run a walk-forward backtest on supplied candles.
 
@@ -69,25 +80,37 @@ async def run_backtest(req: BacktestRequest):
     """
     strategy = _selector.get(req.strategy)
 
-    if len(req.candles) < strategy.lookback + 10:
+    if req.candles:
+        candle_dicts = [c.model_dump() for c in req.candles]
+    else:
+        candle_dicts = candle_repo.list_candles(db, req.instrument_id, req.timeframe, limit=req.history_limit)
+
+    if len(candle_dicts) < strategy.lookback + 10:
         raise HTTPException(
             status_code=422,
-            detail=f"Need at least {strategy.lookback + 10} candles for strategy '{req.strategy}'"
+            detail=f"Need at least {strategy.lookback + 10} candles for strategy '{req.strategy}' (got {len(candle_dicts)})"
         )
 
-    candle_dicts = [c.model_dump() for c in req.candles]
-
+    runtime_settings = settings_repo.get_settings(db) if req.use_decision_engine else None
     engine = BacktestEngine(
         strategy=strategy,
-        settings=None,
+        settings=runtime_settings,
         initial_balance=req.initial_balance,
         risk_pct=req.risk_pct,
         commission_pct=req.commission_pct,
-        use_decision_engine=False,   # DE requires DB; future: load from DB
+        use_decision_engine=req.use_decision_engine,
     )
 
     try:
         result = engine.run(req.instrument_id, candle_dicts)
+        walk_forward = None
+        if req.mode == 'walk_forward':
+            strategies = [
+                _selector.get(name)
+                for name in (req.strategies or StrategySelector.available())
+            ]
+            walk_forward = engine.run_walk_forward(req.instrument_id, candle_dicts, strategies=strategies, folds=req.folds)
+            result.walk_forward = walk_forward
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -110,6 +133,7 @@ async def run_backtest(req: BacktestRequest):
         avg_trade_pct    = result.avg_trade_pct,
         equity_curve     = result.equity_curve,
         trades           = result.trades,
+        walk_forward     = result.walk_forward,
     )
 
 

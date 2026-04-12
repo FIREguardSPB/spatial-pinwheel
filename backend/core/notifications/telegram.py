@@ -26,6 +26,8 @@ from typing import Any
 
 import httpx
 
+from core.utils.http_client import get_env_http_proxy_url, make_async_client
+
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
@@ -91,12 +93,12 @@ class TelegramNotifier:
     def from_settings(cls, settings_or_db) -> "TelegramNotifier | None":
         """
         Convenience alias: accepts Settings ORM row OR SQLAlchemy Session.
-        If a Session is passed, queries Settings table first.
+        If a Session is passed, queries the active settings row first.
         """
         from sqlalchemy.orm import Session as _Session
         if isinstance(settings_or_db, _Session):
-            from core.storage.models import Settings
-            settings_orm = settings_or_db.query(Settings).first()
+            from core.storage.repos import settings as settings_repo
+            settings_orm = settings_repo.get_settings(settings_or_db)
             if not settings_orm:
                 return None
             return cls.from_config(settings_orm)
@@ -134,14 +136,19 @@ class TelegramNotifier:
             "text":       text,
             "parse_mode": "HTML",
         }
+        client_kwargs: dict[str, Any] = {"timeout": 10.0}
+        proxy_url = get_env_http_proxy_url("https")
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with make_async_client(**client_kwargs) as client:
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
             self._send_times.append(time.monotonic())
             return True
         except Exception as e:
-            logger.warning("Telegram send failed: %s", e)
+            logger.warning("Telegram send failed (chat_id=%s, proxy=%s): %s", self.chat_id, proxy_url or "direct", e)
             return False
 
     def _should_notify(self, event: str) -> bool:

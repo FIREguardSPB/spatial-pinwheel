@@ -15,8 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from core.config import get_token, settings as cfg
 from core.storage.session import get_db
 from apps.api.deps import verify_token
+from apps.broker.tbank.adapter import normalize_instrument_id
+from core.services.symbol_adaptive import ensure_symbol_profiles
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -56,16 +59,50 @@ _MOEX_CATALOG = [
 
 
 @router.get("/search")
-async def search_instruments(q: str = Query("", min_length=0)):
-    """Search MOEX instruments by ticker or name (static catalog)."""
+async def search_instruments(
+    q: str = Query("", min_length=0),
+    limit: int = Query(50, ge=1, le=500),
+):
+    """Search instruments with T-Bank live lookup first and static catalog fallback."""
     q_lower = q.lower().strip()
-    if not q_lower:
-        return {"items": _MOEX_CATALOG[:20]}
-    results = [
+    static_items = _MOEX_CATALOG[:limit] if not q_lower else [
         item for item in _MOEX_CATALOG
         if q_lower in item["ticker"].lower() or q_lower in item["name"].lower()
-    ]
-    return {"items": results[:20]}
+    ][:limit]
+
+    runtime_tbank_token = get_token("TBANK_TOKEN") or cfg.TBANK_TOKEN
+    runtime_tbank_account = get_token("TBANK_ACCOUNT_ID") or cfg.TBANK_ACCOUNT_ID
+    if cfg.BROKER_PROVIDER == "tbank" and runtime_tbank_token and q_lower:
+        try:
+            from apps.broker.tbank import TBankGrpcAdapter
+
+            adapter = TBankGrpcAdapter(
+                token=runtime_tbank_token,
+                account_id=runtime_tbank_account,
+                sandbox=cfg.TBANK_SANDBOX,
+            )
+            try:
+                broker_items = await adapter.search_instruments(q, limit=limit)
+            finally:
+                await adapter.close()
+
+            merged: list[dict] = []
+            seen: set[str] = set()
+            for item in broker_items + static_items:
+                instrument_id = normalize_instrument_id(item["instrument_id"])
+                if instrument_id in seen:
+                    continue
+                seen.add(instrument_id)
+                normalized = dict(item)
+                normalized["instrument_id"] = instrument_id
+                merged.append(normalized)
+                if len(merged) >= limit:
+                    break
+            return {"items": merged}
+        except Exception:
+            pass
+
+    return {"items": static_items}
 
 
 # ── Watchlist endpoints ───────────────────────────────────────────────────────
@@ -85,7 +122,7 @@ async def get_watchlist(db: Session = Depends(get_db)):
     return {
         "items": [
             {
-                "instrument_id": w.instrument_id,
+                "instrument_id": normalize_instrument_id(w.instrument_id),
                 "ticker":        w.ticker,
                 "name":          w.name,
                 "exchange":      w.exchange,
@@ -101,23 +138,26 @@ async def get_watchlist(db: Session = Depends(get_db)):
 async def add_to_watchlist(body: WatchlistAdd, db: Session = Depends(get_db)):
     """Add instrument to watchlist."""
     from core.storage.models import Watchlist
-    existing = db.query(Watchlist).filter(Watchlist.instrument_id == body.instrument_id).first()
+    normalized_instrument_id = normalize_instrument_id(body.instrument_id)
+    existing = db.query(Watchlist).filter(Watchlist.instrument_id == normalized_instrument_id).first()
     if existing:
         existing.is_active = True
+        ensure_result = ensure_symbol_profiles(db, [normalized_instrument_id], auto_train=False, source='watchlist_add')
         db.commit()
-        return {"ok": True, "action": "reactivated"}
+        return {"ok": True, "action": "reactivated", "symbol_profiles": ensure_result}
 
     item = Watchlist(
-        instrument_id=body.instrument_id,
-        ticker=body.ticker,
+        instrument_id=normalized_instrument_id,
+        ticker=body.ticker.upper(),
         name=body.name,
-        exchange=body.exchange,
+        exchange=(body.exchange or normalized_instrument_id.split(':')[0]).upper(),
         is_active=True,
         added_ts=int(time.time() * 1000),
     )
     db.add(item)
+    ensure_result = ensure_symbol_profiles(db, [normalized_instrument_id], auto_train=False, source='watchlist_add')
     db.commit()
-    return {"ok": True, "action": "added"}
+    return {"ok": True, "action": "added", "symbol_profiles": ensure_result}
 
 
 @router.delete("/{instrument_id}")
@@ -125,6 +165,7 @@ async def remove_from_watchlist(instrument_id: str, db: Session = Depends(get_db
     """Deactivate instrument in watchlist (soft delete)."""
     from core.storage.models import Watchlist, Position
     # Warn if open position
+    instrument_id = normalize_instrument_id(instrument_id)
     has_position = db.query(Position).filter(
         Position.instrument_id == instrument_id, Position.qty > 0
     ).first()
