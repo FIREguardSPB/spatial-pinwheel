@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,8 @@ from core.ml.runtime import build_ml_runtime_status
 from collections import Counter
 from typing import Any
 from core.storage.models import CandleCache, SymbolEventRegime, DecisionLog
+from core.storage.decision_log_utils import append_decision_log_best_effort
+from core.services import settings_presets as presets_service
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -384,6 +387,122 @@ def get_settings(db: Session = Depends(get_db)):
 def update_settings(update_data: schemas.RiskSettings, db: Session = Depends(get_db)):
     settings_db = repo.update_settings(db, update_data)
     return _settings_to_schema(settings_db)
+
+
+def _preset_to_schema(row) -> schemas.SettingsPresetSchema:
+    return schemas.SettingsPresetSchema(id=str(getattr(row, 'id', '') or ''), name=str(getattr(row, 'name', '') or ''), description=str(getattr(row, 'description', '') or ''), settings_json=dict(getattr(row, 'settings_json', {}) or {}), created_at=int(getattr(row, 'created_at', 0) or 0), updated_at=int(getattr(row, 'updated_at', 0) or 0), is_system=bool(getattr(row, 'is_system', False)))
+
+
+def _active_watchlist_ids(db: Session) -> list[str]:
+    from core.storage.models import Watchlist
+    rows = db.query(Watchlist).all()
+    active = []
+    for row in rows or []:
+        if bool(getattr(row, 'is_active', False)):
+            instrument_id = presets_service.normalize_instrument_id(getattr(row, 'instrument_id', None))
+            if instrument_id:
+                active.append(instrument_id)
+    return sorted(dict.fromkeys(active))
+
+
+def _live_preset_snapshot(db: Session, settings_db=None) -> dict[str, Any]:
+    settings_db = settings_db or repo.get_settings(db)
+    payload = _settings_to_schema(settings_db).model_dump(mode='json')
+    return presets_service.build_snapshot_from_settings_dict(payload, watchlist=_active_watchlist_ids(db))
+
+
+def _ensure_system_presets(db: Session) -> None:
+    repo.ensure_system_presets(db, presets_service.build_system_presets())
+
+
+@router.get('/presets', response_model=schemas.SettingsPresetListResponse)
+def list_settings_presets(db: Session = Depends(get_db)):
+    _ensure_system_presets(db)
+    return {'items': [_preset_to_schema(row) for row in repo.list_presets(db)]}
+
+
+@router.post('/presets', response_model=schemas.SettingsPresetMutationResponse)
+def create_settings_preset(body: schemas.SettingsPresetCreate, db: Session = Depends(get_db)):
+    _ensure_system_presets(db)
+    name = str(body.name or '').strip()
+    if not name:
+        raise HTTPException(status_code=400, detail='Preset name is required')
+    snapshot = _live_preset_snapshot(db)
+    preset_id = f"preset_{presets_service.slugify_preset_name(name)}_{int(time.time())}"
+    try:
+        row, created = repo.create_or_update_user_preset(db, preset_id=preset_id, name=name, description=body.description or '', settings_json=snapshot)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {'preset': _preset_to_schema(row), 'created': created}
+
+
+@router.get('/presets/{preset_id}', response_model=schemas.SettingsPresetMutationResponse)
+def get_settings_preset(preset_id: str, db: Session = Depends(get_db)):
+    _ensure_system_presets(db)
+    row = repo.get_preset(db, preset_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail='Preset not found')
+    return {'preset': _preset_to_schema(row)}
+
+
+@router.put('/presets/{preset_id}', response_model=schemas.SettingsPresetMutationResponse)
+def update_settings_preset(preset_id: str, body: schemas.SettingsPresetUpdate, db: Session = Depends(get_db)):
+    _ensure_system_presets(db)
+    settings_json = body.settings_json
+    if settings_json is not None:
+        try:
+            settings_json = presets_service.validate_snapshot_payload(settings_json)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        row = repo.update_preset(db, preset_id, name=body.name, description=body.description, settings_json=settings_json)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {'preset': _preset_to_schema(row)}
+
+
+@router.delete('/presets/{preset_id}')
+def delete_settings_preset(preset_id: str, db: Session = Depends(get_db)):
+    _ensure_system_presets(db)
+    try:
+        deleted = repo.delete_preset(db, preset_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail='Preset not found')
+    return {'ok': True, 'deleted': preset_id}
+
+
+@router.post('/presets/{preset_id}/apply', response_model=schemas.SettingsPresetApplyResponse)
+def apply_settings_preset(preset_id: str, db: Session = Depends(get_db)):
+    _ensure_system_presets(db)
+    row = repo.get_preset(db, preset_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail='Preset not found')
+    snapshot = dict(getattr(row, 'settings_json', {}) or {})
+    try:
+        snapshot = presets_service.validate_snapshot_payload(snapshot)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    settings_db = repo.get_settings(db)
+    current_schema = _settings_to_schema(settings_db).model_dump(mode='json')
+    current_snapshot = _live_preset_snapshot(db, settings_db)
+    merged_schema_dict = presets_service.merge_snapshot_into_settings(current_schema, snapshot)
+    try:
+        merged_schema = schemas.RiskSettings(**merged_schema_dict)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    updated = repo.update_settings(db, merged_schema)
+    watchlist_diff = presets_service.apply_watchlist_snapshot(db, snapshot.get('watchlist')) if 'watchlist' in snapshot else {'added': [], 'removed': [], 'kept': []}
+    diff = presets_service.build_diff_summary(current_snapshot, snapshot)
+    diff['watchlist'] = watchlist_diff
+    diff['applied_settings_updated_ts'] = int(getattr(updated, 'updated_ts', 0) or 0)
+    append_decision_log_best_effort(log_type='settings_preset_applied', message=f"Applied settings preset {getattr(row, 'name', preset_id)}", payload={'preset_id': preset_id, 'preset_name': getattr(row, 'name', preset_id), 'changed_keys': diff.get('changed_keys', []), 'diff_summary': diff.get('diff_summary', []), 'watchlist': watchlist_diff})
+    return {'ok': True, 'preset': _preset_to_schema(row), 'applied': diff}
 
 
 @router.get('/trading-schedule')

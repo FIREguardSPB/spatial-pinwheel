@@ -65,8 +65,12 @@ class MLDatasetTests(unittest.TestCase):
         self.assertEqual(len(datasets['trade_outcome'].rows), 1)
         self.assertEqual(datasets['trade_outcome'].rows[0].label, 1)
         self.assertEqual(datasets['take_fill'].rows[0].features['strategy'], 'breakout')
+        self.assertEqual(datasets['take_fill'].rows[0].meta['fill_outcome'], 'filled')
+        self.assertEqual(datasets['take_fill'].rows[1].meta['fill_outcome'], 'rejected')
+        self.assertIn('diagnostics', datasets['take_fill'].stats)
+        self.assertIn('by_fill_outcome', datasets['take_fill'].stats['diagnostics'])
 
-    def test_trade_outcome_prefers_closed_logs(self):
+    def test_trade_outcome_prefers_closed_logs_and_skips_duplicates(self):
         signals = [
             SimpleNamespace(
                 id='sig1',
@@ -112,7 +116,21 @@ class MLDatasetTests(unittest.TestCase):
                         'fee_load_pct': 0.06,
                     },
                 },
-            )
+            ),
+            SimpleNamespace(
+                ts=1710003605000,
+                payload={
+                    'signal_id': 'sig1',
+                    'trace_id': 'trace_1',
+                    'instrument_id': 'TQBR:SBER',
+                    'opened_ts': 1710000000000,
+                    'closed_ts': 1710003605000,
+                    'opened_qty': 10.0,
+                    'qty': 10.0,
+                    'net_pnl': -15.0,
+                    'reason': 'SL_DUP',
+                },
+            ),
         ]
         datasets = build_training_rows_from_entities(signals, positions=[], close_logs=close_logs)
         self.assertEqual(len(datasets['trade_outcome'].rows), 1)
@@ -121,6 +139,42 @@ class MLDatasetTests(unittest.TestCase):
         self.assertEqual(row.meta['close_reason'], 'SL')
         self.assertEqual(row.features['bars_held'], 6)
         self.assertEqual(datasets['trade_outcome'].stats['mapped_close_logs'], 1)
+        self.assertEqual(datasets['trade_outcome'].stats['duplicate_close_logs_skipped'], 1)
+
+    def test_take_fill_uses_decision_logs_for_negative_reason(self):
+        signals = [
+            SimpleNamespace(
+                id='sig3',
+                instrument_id='TQBR:LKOH',
+                side='BUY',
+                entry=500.0,
+                sl=495.0,
+                tp=510.0,
+                size=2.0,
+                created_ts=1710001200000,
+                status='rejected',
+                meta={
+                    'final_decision': 'TAKE',
+                    'strategy_name': 'breakout',
+                    'regime': 'trend',
+                    'decision': {'score': 79},
+                    'trace_id': 'trace_3',
+                },
+            ),
+        ]
+        decision_logs = [
+            SimpleNamespace(
+                type='execution_risk_block',
+                ts=1710001260000,
+                payload={'signal_id': 'sig3', 'trace_id': 'trace_3', 'risk_reason': 'daily_limit'},
+            ),
+        ]
+        datasets = build_training_rows_from_entities(signals, positions=[], decision_logs=decision_logs)
+        row = datasets['take_fill'].rows[0]
+        self.assertEqual(row.label, 0)
+        self.assertEqual(row.meta['fill_outcome'], 'execution_risk_block')
+        self.assertEqual(row.meta['label_source'], 'decision_log')
+        self.assertEqual(datasets['take_fill'].stats['fill_outcomes']['execution_risk_block'], 1)
 
     def test_train_classifier_rare_class_fallback(self):
         rows = []

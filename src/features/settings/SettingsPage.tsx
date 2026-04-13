@@ -6,6 +6,7 @@ import { useStartBot, useStopBot, useSyncTradingSchedule, useUpdateSettings } fr
 import { useEventRegimeView, useRuntimeOverview, useSymbolProfileView, useUiSettings } from '../core/uiQueries';
 import { useTestTelegram } from './hooks';
 import { WorkerAnalysisInspector } from '../system/WorkerAnalysisInspector';
+import { PresetsPanel } from './components/PresetsPanel';
 import { useAppStore } from '../../store';
 import type { RiskSettings } from '../../types';
 
@@ -199,6 +200,7 @@ export default function SettingsPage() {
       </div>
 
       <QueryBlock isLoading={page.isLoading && !page.data} isError={page.isError && !page.data} errorMessage="Не удалось загрузить bootstrap настройки" onRetry={reloadAll}>
+        <PresetsPanel currentSettings={form} currentWatchlist={watchlist.map((item) => item.instrument_id)} onRefresh={reloadAll} />
         {tab === 'overview' ? (
           <div className="space-y-4">
             <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">

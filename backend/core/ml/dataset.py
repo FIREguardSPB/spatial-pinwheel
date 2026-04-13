@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -123,7 +123,52 @@ def _msk_hour(ts_ms: int) -> int:
         return 0
 
 
-def build_feature_dict_from_signal(signal: Signal | None, *, signal_meta: dict[str, Any] | None = None, final_decision: str | None = None, ai_row: Any | None = None) -> dict[str, Any]:
+def _payload_dict(row: Any) -> dict[str, Any]:
+    payload = getattr(row, 'payload', None)
+    return dict(payload or {}) if isinstance(payload, dict) else {}
+
+
+def _log_keys(*, signal_id: str | None, trace_id: str | None) -> list[str]:
+    keys: list[str] = []
+    if signal_id:
+        keys.append(f's:{signal_id}')
+    if trace_id:
+        keys.append(f't:{trace_id}')
+    return keys
+
+
+def _index_logs(decision_logs: Iterable[Any] | None) -> dict[str, list[Any]]:
+    index: dict[str, list[Any]] = defaultdict(list)
+    for row in decision_logs or []:
+        payload = _payload_dict(row)
+        signal_id = str(payload.get('signal_id') or '') or None
+        trace_id = str(payload.get('trace_id') or '') or None
+        for key in _log_keys(signal_id=signal_id, trace_id=trace_id):
+            index[key].append(row)
+    return index
+
+
+def _signal_logs(log_index: dict[str, list[Any]], *, signal_id: str, trace_id: str | None) -> list[Any]:
+    rows: list[Any] = []
+    seen: set[int] = set()
+    for key in _log_keys(signal_id=signal_id, trace_id=trace_id):
+        for row in log_index.get(key, []):
+            row_key = id(row)
+            if row_key in seen:
+                continue
+            seen.add(row_key)
+            rows.append(row)
+    rows.sort(key=lambda row: int(getattr(row, 'ts', 0) or 0))
+    return rows
+
+
+def build_feature_dict_from_signal(
+    signal: Signal | None,
+    *,
+    signal_meta: dict[str, Any] | None = None,
+    final_decision: str | None = None,
+    ai_row: Any | None = None,
+) -> dict[str, Any]:
     meta = signal_meta if signal_meta is not None else _signal_meta(signal)
     decision = _extract_decision(meta)
     ai_meta = _extract_ai_decision(meta)
@@ -193,7 +238,18 @@ def build_feature_dict_from_signal(signal: Signal | None, *, signal_meta: dict[s
     }
 
 
-def build_live_feature_dict(*, instrument_id: str, side: str, entry: float, sl: float, tp: float, size: float, ts_ms: int, meta: dict[str, Any] | None = None, final_decision: str | None = None) -> dict[str, Any]:
+def build_live_feature_dict(
+    *,
+    instrument_id: str,
+    side: str,
+    entry: float,
+    sl: float,
+    tp: float,
+    size: float,
+    ts_ms: int,
+    meta: dict[str, Any] | None = None,
+    final_decision: str | None = None,
+) -> dict[str, Any]:
     meta = dict(meta or {})
     fake_signal = type('LiveSignal', (), {
         'instrument_id': instrument_id,
@@ -209,11 +265,77 @@ def build_live_feature_dict(*, instrument_id: str, side: str, entry: float, sl: 
     return build_feature_dict_from_signal(fake_signal, signal_meta=meta, final_decision=final_decision)
 
 
+def _build_dataset_diagnostics(rows: list[TrainingRow], *, bucket_field: str | None = None) -> dict[str, Any]:
+    by_strategy: dict[str, Counter[int]] = defaultdict(Counter)
+    by_regime: dict[str, Counter[int]] = defaultdict(Counter)
+    by_instrument: dict[str, Counter[int]] = defaultdict(Counter)
+    by_session_hour: dict[str, Counter[int]] = defaultdict(Counter)
+    by_bucket: dict[str, Counter[int]] = defaultdict(Counter)
+
+    for row in rows:
+        label = int(row.label)
+        by_strategy[str(row.features.get('strategy') or row.meta.get('strategy') or 'unknown')][label] += 1
+        by_regime[str(row.features.get('regime') or row.meta.get('regime') or 'unknown')][label] += 1
+        by_instrument[str(row.instrument_id or row.features.get('instrument_id') or 'unknown')][label] += 1
+        by_session_hour[str(row.features.get('msk_hour') if row.features.get('msk_hour') is not None else 'unknown')][label] += 1
+        if bucket_field:
+            by_bucket[str(row.meta.get(bucket_field) or 'unknown')][label] += 1
+
+    def _finalize(source: dict[str, Counter[int]], *, top: int | None = None) -> dict[str, Any]:
+        items = sorted(
+            source.items(),
+            key=lambda item: (-sum(item[1].values()), item[0]),
+        )
+        if top is not None:
+            items = items[: max(1, int(top))]
+        return {
+            key: {
+                'total': int(sum(counter.values())),
+                'labels': {str(label): int(count) for label, count in sorted(counter.items())},
+            }
+            for key, counter in items
+        }
+
+    payload = {
+        'by_strategy': _finalize(by_strategy),
+        'by_regime': _finalize(by_regime),
+        'by_instrument': _finalize(by_instrument, top=20),
+        'by_session_hour': _finalize(by_session_hour),
+    }
+    if bucket_field:
+        payload[f'by_{bucket_field}'] = _finalize(by_bucket)
+    return payload
+
+
+def _resolve_take_fill_outcome(signal: Any, *, position: Any | None, logs: list[Any]) -> tuple[int, str, str]:
+    status = str(getattr(signal, 'status', '') or '').lower()
+    log_types = {str(getattr(row, 'type', '') or '') for row in logs}
+
+    if position is not None or status == 'executed' or 'trade_filled' in log_types:
+        return 1, 'filled', 'position_or_trade_fill'
+    if 'execution_risk_block' in log_types:
+        return 0, 'execution_risk_block', 'decision_log'
+    if status == 'execution_error':
+        return 0, 'execution_error', 'signal_status'
+    if 'signal_risk_block' in log_types:
+        return 0, 'signal_risk_block', 'decision_log'
+    if status == 'rejected':
+        return 0, 'rejected', 'signal_status'
+    if status == 'approved':
+        return 0, 'approved_not_executed', 'signal_status'
+    if status in {'pending_review', 'pending'}:
+        return 0, 'pending_not_executed', 'signal_status'
+    if status == 'expired':
+        return 0, 'expired_without_fill', 'signal_status'
+    return 0, 'not_filled', 'signal_status'
+
+
 def build_training_rows_from_entities(
     signals: Iterable[Any],
     positions: Iterable[Any],
     ai_rows: Iterable[Any] | None = None,
     close_logs: Iterable[Any] | None = None,
+    decision_logs: Iterable[Any] | None = None,
 ) -> dict[str, TrainingDataset]:
     ai_by_signal: dict[str, Any] = {}
     for row in ai_rows or []:
@@ -238,33 +360,46 @@ def build_training_rows_from_entities(
     for pos in positions:
         if _safe_float(getattr(pos, 'qty', None)) > 0:
             continue
-        sig_id = str(getattr(pos, 'opened_signal_id', '') or '')
+        signal_id = str(getattr(pos, 'opened_signal_id', '') or '')
         trace_id = str(getattr(pos, 'trace_id', '') or '')
-        if sig_id and sig_id not in position_by_signal:
-            position_by_signal[sig_id] = pos
+        if signal_id and signal_id not in position_by_signal:
+            position_by_signal[signal_id] = pos
         if trace_id and trace_id not in position_by_trace:
             position_by_trace[trace_id] = pos
+
+    decision_log_index = _index_logs(decision_logs)
 
     fill_rows: list[TrainingRow] = []
     outcome_rows: list[TrainingRow] = []
     fill_labels = Counter()
+    fill_outcomes = Counter()
+    fill_label_sources = Counter()
     outcome_labels = Counter()
     mapped_positions = 0
     mapped_close_logs = 0
+    duplicate_close_logs_skipped = 0
     outcome_signal_ids: set[str] = set()
+    seen_fill_signal_ids: set[str] = set()
+    seen_close_signal_keys: set[str] = set()
 
     for signal in signal_list:
         signal_id = str(getattr(signal, 'id', '') or '')
-        if not signal_id:
+        if not signal_id or signal_id in seen_fill_signal_ids:
             continue
         meta = _signal_meta(signal)
-        final_decision = str(meta.get('final_decision') or ((_extract_decision(meta)).get('decision')) or '').upper()
+        final_decision = str(meta.get('final_decision') or (_extract_decision(meta).get('decision')) or '').upper()
         if final_decision != 'TAKE':
             continue
-        features = build_feature_dict_from_signal(signal, signal_meta=meta, final_decision=final_decision, ai_row=ai_by_signal.get(signal_id))
-        trace_id = str(meta.get('trace_id') or '')
+        trace_id = str(meta.get('trace_id') or '') or None
+        features = build_feature_dict_from_signal(
+            signal,
+            signal_meta=meta,
+            final_decision=final_decision,
+            ai_row=ai_by_signal.get(signal_id),
+        )
         position = position_by_signal.get(signal_id) or (position_by_trace.get(trace_id) if trace_id else None)
-        filled = 1 if (str(getattr(signal, 'status', '') or '').lower() == 'executed' or position is not None) else 0
+        signal_logs = _signal_logs(decision_log_index, signal_id=signal_id, trace_id=trace_id)
+        filled, fill_outcome, label_source = _resolve_take_fill_outcome(signal, position=position, logs=signal_logs)
         fill_row = TrainingRow(
             signal_id=signal_id,
             instrument_id=str(getattr(signal, 'instrument_id', '') or 'unknown'),
@@ -273,29 +408,44 @@ def build_training_rows_from_entities(
             features=features,
             meta={
                 'status': str(getattr(signal, 'status', '') or ''),
-                'trace_id': trace_id or None,
+                'trace_id': trace_id,
                 'strategy': features.get('strategy'),
                 'regime': features.get('regime'),
+                'fill_outcome': fill_outcome,
+                'label_source': label_source,
             },
         )
         fill_rows.append(fill_row)
         fill_labels[filled] += 1
+        fill_outcomes[fill_outcome] += 1
+        fill_label_sources[label_source] += 1
+        seen_fill_signal_ids.add(signal_id)
 
     for log in close_logs or []:
-        payload = getattr(log, 'payload', None)
-        if not isinstance(payload, dict):
+        payload = _payload_dict(log)
+        if not payload:
             continue
-        signal_id = str(payload.get('signal_id') or '')
-        trace_id = str(payload.get('trace_id') or '')
-        signal = signal_by_id.get(signal_id) or (signal_by_trace.get(trace_id) if trace_id else None)
+        raw_signal_id = str(payload.get('signal_id') or '') or None
+        trace_id = str(payload.get('trace_id') or '') or None
+        signal = signal_by_id.get(raw_signal_id or '') or (signal_by_trace.get(trace_id) if trace_id else None)
         if signal is None:
             continue
         meta = _signal_meta(signal)
-        final_decision = str(meta.get('final_decision') or ((_extract_decision(meta)).get('decision')) or '').upper()
+        final_decision = str(meta.get('final_decision') or (_extract_decision(meta).get('decision')) or '').upper()
         if final_decision != 'TAKE':
             continue
-        signal_id = str(getattr(signal, 'id', '') or signal_id)
-        features = build_feature_dict_from_signal(signal, signal_meta=meta, final_decision=final_decision, ai_row=ai_by_signal.get(signal_id))
+        signal_id = str(getattr(signal, 'id', '') or raw_signal_id or '')
+        dedupe_key = signal_id or f'trace:{trace_id}'
+        if dedupe_key in seen_close_signal_keys:
+            duplicate_close_logs_skipped += 1
+            continue
+        seen_close_signal_keys.add(dedupe_key)
+        features = build_feature_dict_from_signal(
+            signal,
+            signal_meta=meta,
+            final_decision=final_decision,
+            ai_row=ai_by_signal.get(signal_id),
+        )
         diagnostics = dict(payload.get('exit_diagnostics') or {}) if isinstance(payload.get('exit_diagnostics'), dict) else {}
         excursion = dict(payload.get('excursion') or {}) if isinstance(payload.get('excursion'), dict) else {}
         realized = _safe_float(payload.get('net_pnl'), _safe_float(payload.get('gross_pnl')))
@@ -321,11 +471,12 @@ def build_training_rows_from_entities(
             features=outcome_features,
             meta={
                 'realized_pnl': round(realized, 6),
-                'trace_id': trace_id or None,
+                'trace_id': trace_id,
                 'strategy': features.get('strategy'),
                 'regime': features.get('regime'),
                 'close_reason': str(payload.get('reason') or ''),
                 'closed_ts': _safe_int(payload.get('closed_ts') or getattr(log, 'ts', None)),
+                'label_source': 'position_closed_log',
             },
         )
         outcome_rows.append(outcome_row)
@@ -339,17 +490,22 @@ def build_training_rows_from_entities(
             if not signal_id:
                 continue
             meta = _signal_meta(signal)
-            final_decision = str(meta.get('final_decision') or ((_extract_decision(meta)).get('decision')) or '').upper()
+            final_decision = str(meta.get('final_decision') or (_extract_decision(meta).get('decision')) or '').upper()
             if final_decision != 'TAKE':
                 continue
-            trace_id = str(meta.get('trace_id') or '')
+            trace_id = str(meta.get('trace_id') or '') or None
             position = position_by_signal.get(signal_id) or (position_by_trace.get(trace_id) if trace_id else None)
             if position is None:
                 continue
             mapped_positions += 1
             realized = _safe_float(getattr(position, 'realized_pnl', None))
             label = 1 if realized > 0 else 0
-            features = build_feature_dict_from_signal(signal, signal_meta=meta, final_decision=final_decision, ai_row=ai_by_signal.get(signal_id))
+            features = build_feature_dict_from_signal(
+                signal,
+                signal_meta=meta,
+                final_decision=final_decision,
+                ai_row=ai_by_signal.get(signal_id),
+            )
             outcome_features = dict(features)
             outcome_features['filled'] = 1
             outcome_features['opened_qty'] = round(_safe_float(getattr(position, 'opened_qty', None), _safe_float(getattr(position, 'qty', None))), 6)
@@ -366,9 +522,10 @@ def build_training_rows_from_entities(
                 features=outcome_features,
                 meta={
                     'realized_pnl': round(realized, 6),
-                    'trace_id': trace_id or None,
+                    'trace_id': trace_id,
                     'strategy': features.get('strategy'),
                     'regime': features.get('regime'),
+                    'label_source': 'position_row_fallback',
                 },
             )
             outcome_rows.append(outcome_row)
@@ -383,6 +540,9 @@ def build_training_rows_from_entities(
             stats={
                 'labels': dict(fill_labels),
                 'mapped_positions': mapped_positions,
+                'fill_outcomes': dict(fill_outcomes),
+                'label_sources': dict(fill_label_sources),
+                'diagnostics': _build_dataset_diagnostics(fill_rows, bucket_field='fill_outcome'),
             },
         ),
         'trade_outcome': TrainingDataset(
@@ -393,7 +553,9 @@ def build_training_rows_from_entities(
                 'labels': dict(outcome_labels),
                 'mapped_positions': mapped_positions,
                 'mapped_close_logs': mapped_close_logs,
+                'duplicate_close_logs_skipped': duplicate_close_logs_skipped,
                 'unique_outcome_signals': len(outcome_signal_ids),
+                'diagnostics': _build_dataset_diagnostics(outcome_rows, bucket_field='label_source'),
             },
         ),
     }
@@ -419,13 +581,20 @@ def build_training_datasets(db: Session, *, lookback_days: int = 120) -> dict[st
         .order_by(AIDecisionLog.ts.asc())
         .all()
     )
-    close_logs = (
+    decision_logs = (
         db.query(DecisionLog)
-        .filter(DecisionLog.type == 'position_closed', DecisionLog.ts >= cutoff)
+        .filter(DecisionLog.ts >= cutoff)
         .order_by(DecisionLog.ts.asc())
         .all()
     )
-    datasets = build_training_rows_from_entities(signals, positions, ai_rows, close_logs)
+    close_logs = [row for row in decision_logs if str(getattr(row, 'type', '') or '') == 'position_closed']
+    datasets = build_training_rows_from_entities(
+        signals,
+        positions,
+        ai_rows,
+        close_logs,
+        decision_logs,
+    )
     for dataset in datasets.values():
         dataset.lookback_days = int(lookback_days)
         dataset.stats = {
@@ -433,6 +602,7 @@ def build_training_datasets(db: Session, *, lookback_days: int = 120) -> dict[st
             'signals_scanned': len(signals),
             'positions_scanned': len(positions),
             'ai_rows_scanned': len(ai_rows),
+            'decision_logs_scanned': len(decision_logs),
             'close_logs_scanned': len(close_logs),
             'built_at_ts': _now_ms(),
         }

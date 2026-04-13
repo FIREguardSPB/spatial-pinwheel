@@ -176,6 +176,42 @@ class RiskSettings(BaseModel):
     bot_enabled: Optional[bool] = False
 
 
+class SettingsPresetSchema(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = ''
+    settings_json: Dict[str, Any] = {}
+    created_at: int
+    updated_at: int
+    is_system: bool = False
+
+
+class SettingsPresetListResponse(BaseModel):
+    items: List[SettingsPresetSchema]
+
+
+class SettingsPresetCreate(BaseModel):
+    name: str
+    description: Optional[str] = ''
+
+
+class SettingsPresetUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    settings_json: Optional[Dict[str, Any]] = None
+
+
+class SettingsPresetMutationResponse(BaseModel):
+    preset: SettingsPresetSchema
+    created: Optional[bool] = None
+
+
+class SettingsPresetApplyResponse(BaseModel):
+    ok: bool
+    preset: SettingsPresetSchema
+    applied: Dict[str, Any]
+
+
 # --- Signals ---
 class Signal(BaseModel):
     id: str

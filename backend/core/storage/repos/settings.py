@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
+import time
 
-from core.storage.models import Settings
+try:
+    from sqlalchemy.orm import Session
+except Exception:  # pragma: no cover - lightweight tests without sqlalchemy
+    class Session:  # type: ignore[override]
+        pass
+
+from core.storage.models import Settings, SettingsPreset
 from core.models import schemas
 
 
@@ -323,3 +329,115 @@ def update_settings(db: Session, update_data: schemas.RiskSettings) -> Settings:
     db.commit()
     db.refresh(settings)
     return settings
+
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _all_presets(db: Session) -> list[SettingsPreset]:
+    try:
+        rows = db.query(SettingsPreset).all()
+    except Exception:
+        rows = []
+    return list(rows or [])
+
+
+def list_presets(db: Session) -> list[SettingsPreset]:
+    rows = _all_presets(db)
+    return sorted(rows, key=lambda row: (not bool(getattr(row, 'is_system', False)), str(getattr(row, 'name', '') or '').lower(), -int(getattr(row, 'updated_at', 0) or 0)))
+
+
+def get_preset(db: Session, preset_id: str) -> SettingsPreset | None:
+    for row in _all_presets(db):
+        if str(getattr(row, 'id', '') or '') == str(preset_id):
+            return row
+    return None
+
+
+def get_preset_by_name(db: Session, name: str) -> SettingsPreset | None:
+    target = str(name or '').strip().lower()
+    if not target:
+        return None
+    for row in _all_presets(db):
+        if str(getattr(row, 'name', '') or '').strip().lower() == target:
+            return row
+    return None
+
+
+def ensure_system_presets(db: Session, presets: list[dict]) -> list[SettingsPreset]:
+    existing_ids = {str(getattr(row, 'id', '') or '') for row in _all_presets(db)}
+    changed = False
+    for preset in presets:
+        preset_id = str(preset.get('id') or '')
+        if not preset_id or preset_id in existing_ids:
+            continue
+        row = SettingsPreset(id=preset_id, name=str(preset.get('name') or preset_id), description=str(preset.get('description') or ''), settings_json=dict(preset.get('settings_json') or {}), created_at=int(preset.get('created_at') or _now_ms()), updated_at=int(preset.get('updated_at') or _now_ms()), is_system=bool(preset.get('is_system', True)))
+        db.add(row)
+        changed = True
+    if changed:
+        db.commit()
+    return list_presets(db)
+
+
+def create_or_update_user_preset(db: Session, *, preset_id: str, name: str, description: str | None, settings_json: dict) -> tuple[SettingsPreset, bool]:
+    existing = get_preset_by_name(db, name)
+    now_ms = _now_ms()
+    if existing is not None:
+        if bool(getattr(existing, 'is_system', False)):
+            raise ValueError('system preset with the same name already exists')
+        existing.description = str(description or '')
+        existing.settings_json = dict(settings_json or {})
+        existing.updated_at = now_ms
+        db.commit()
+        try:
+            db.refresh(existing)
+        except Exception:
+            pass
+        return existing, False
+    row = SettingsPreset(id=preset_id, name=str(name).strip(), description=str(description or ''), settings_json=dict(settings_json or {}), created_at=now_ms, updated_at=now_ms, is_system=False)
+    db.add(row)
+    db.commit()
+    try:
+        db.refresh(row)
+    except Exception:
+        pass
+    return row, True
+
+
+def update_preset(db: Session, preset_id: str, *, name: str | None = None, description: str | None = None, settings_json: dict | None = None) -> SettingsPreset:
+    row = get_preset(db, preset_id)
+    if row is None:
+        raise LookupError('preset not found')
+    if bool(getattr(row, 'is_system', False)):
+        raise PermissionError('system presets are read-only')
+    if name is not None:
+        other = get_preset_by_name(db, name)
+        if other is not None and str(getattr(other, 'id', '') or '') != str(preset_id):
+            if bool(getattr(other, 'is_system', False)):
+                raise ValueError('system preset with the same name already exists')
+            raise ValueError('preset with the same name already exists')
+        row.name = str(name).strip()
+    if description is not None:
+        row.description = str(description or '')
+    if settings_json is not None:
+        row.settings_json = dict(settings_json or {})
+    row.updated_at = _now_ms()
+    db.commit()
+    try:
+        db.refresh(row)
+    except Exception:
+        pass
+    return row
+
+
+def delete_preset(db: Session, preset_id: str) -> bool:
+    row = get_preset(db, preset_id)
+    if row is None:
+        return False
+    if bool(getattr(row, 'is_system', False)):
+        raise PermissionError('system presets are read-only')
+    db.delete(row)
+    db.commit()
+    return True

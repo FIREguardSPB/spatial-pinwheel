@@ -41,7 +41,9 @@ except Exception:  # pragma: no cover - lightweight tests without sqlalchemy
         return None
 
     class Base:
-        pass
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
 import datetime
 
 
@@ -225,6 +227,23 @@ class Settings(Base):
     is_active = Column(Boolean, default=True)
 
     updated_ts = Column(BigInteger, default=now_utc_ms, onupdate=now_utc_ms)
+
+
+class SettingsPreset(Base):
+    __tablename__ = "settings_presets"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, default="")
+    settings_json = Column(JSONB, default={})
+    created_at = Column(BigInteger, default=now_utc_ms)
+    updated_at = Column(BigInteger, default=now_utc_ms, onupdate=now_utc_ms)
+    is_system = Column(Boolean, default=False)
+
+    __table_args__ = (
+        Index("idx_settings_presets_name", "name"),
+        Index("idx_settings_presets_system", "is_system", "updated_at"),
+    )
 
 
 class Signal(Base):

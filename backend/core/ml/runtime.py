@@ -34,6 +34,7 @@ class MLPredictionOverlay:
     execution_priority: float = 1.0
     allocator_priority_multiplier: float = 1.0
     suppress_take: bool = False
+    action: str = 'observe'
     reason: str = 'ml_disabled'
     target_model_id: str | None = None
     fill_model_id: str | None = None
@@ -234,6 +235,18 @@ def train_ml_models(db: Session, settings: Settings, *, force: bool = False, sou
     }
 
 
+def _overlay_action(reason: str | None, *, suppress_take: bool = False) -> str:
+    if suppress_take or str(reason or '') == 'ml_take_veto':
+        return 'veto'
+    if str(reason or '') == 'ml_boost':
+        return 'boost'
+    if str(reason or '') == 'ml_risk_cut':
+        return 'cut'
+    if str(reason or '') in {'no_active_model', 'ml_disabled'}:
+        return 'unavailable'
+    return 'observe'
+
+
 def build_ml_runtime_status(db: Session, settings: Settings) -> dict[str, Any]:
     latest_outcome = get_latest_training_run(db, target='trade_outcome', active_only=False)
     latest_fill = get_latest_training_run(db, target='take_fill', active_only=False)
@@ -276,6 +289,8 @@ def _run_payload(row: MLTrainingRun | None) -> dict[str, Any] | None:
         'params': row.params or {},
         'notes': row.notes,
         'is_active': bool(row.is_active),
+        'freshness_minutes': (round(max(0.0, (_now_ms() - int(row.ts or 0)) / 60000.0), 2) if int(row.ts or 0) > 0 else None),
+        'freshness_hours': (round(max(0.0, (_now_ms() - int(row.ts or 0)) / 3600000.0), 3) if int(row.ts or 0) > 0 else None),
     }
 
 
@@ -294,14 +309,14 @@ def evaluate_ml_overlay(
     final_decision: str,
 ) -> MLPredictionOverlay:
     if not bool(_get_setting(settings, 'ml_enabled', True)):
-        return MLPredictionOverlay(enabled=False, model_ready=False, target_probability=None, fill_probability=None, reason='ml_disabled')
+        return MLPredictionOverlay(enabled=False, model_ready=False, target_probability=None, fill_probability=None, action='unavailable', reason='ml_disabled')
 
     target_run = get_latest_training_run(db, target='trade_outcome', active_only=True)
     fill_run = get_latest_training_run(db, target='take_fill', active_only=True)
     target_artifact = load_artifact(getattr(target_run, 'artifact_path', None)) if target_run else None
     fill_artifact = load_artifact(getattr(fill_run, 'artifact_path', None)) if fill_run else None
     if target_artifact is None and fill_artifact is None:
-        return MLPredictionOverlay(enabled=True, model_ready=False, target_probability=None, fill_probability=None, reason='no_active_model')
+        return MLPredictionOverlay(enabled=True, model_ready=False, target_probability=None, fill_probability=None, action='unavailable', reason='no_active_model')
 
     features = build_live_feature_dict(
         instrument_id=instrument_id,
@@ -327,6 +342,7 @@ def evaluate_ml_overlay(
     allocator_priority_multiplier = 1.0
     suppress_take = False
     reason = 'neutral'
+    action = 'observe'
 
     target_score = float(target_probability if target_probability is not None else 0.5)
     fill_score = float(fill_probability if fill_probability is not None else 0.5)
@@ -347,18 +363,21 @@ def evaluate_ml_overlay(
         execution_priority = exec_penalty
         allocator_priority_multiplier = alloc_penalty
         reason = 'ml_take_veto'
+        action = 'veto'
     elif target_probability is not None and target_score >= boost_threshold and (fill_probability is None or fill_score >= fill_threshold):
         risk_mult = pass_risk
         threshold_adjustment = -threshold_bonus
         execution_priority = exec_boost
         allocator_priority_multiplier = alloc_boost
         reason = 'ml_boost'
+        action = 'boost'
     elif target_probability is not None and target_score < cut_threshold:
         risk_mult = fail_risk
         threshold_adjustment = threshold_penalty
         execution_priority = exec_penalty
         allocator_priority_multiplier = alloc_penalty
         reason = 'ml_risk_cut'
+        action = 'cut'
 
     return MLPredictionOverlay(
         enabled=True,
@@ -370,6 +389,7 @@ def evaluate_ml_overlay(
         execution_priority=round(execution_priority, 4),
         allocator_priority_multiplier=round(allocator_priority_multiplier, 4),
         suppress_take=bool(suppress_take),
+        action=action,
         reason=reason,
         target_model_id=getattr(target_run, 'id', None),
         fill_model_id=getattr(fill_run, 'id', None),

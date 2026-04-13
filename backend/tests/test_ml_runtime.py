@@ -47,6 +47,7 @@ class MLRuntimeTests(unittest.TestCase):
         self.assertTrue(overlay.suppress_take)
         self.assertLess(overlay.risk_multiplier, 1.0)
         self.assertEqual(overlay.reason, 'ml_take_veto')
+        self.assertEqual(overlay.action, 'veto')
 
 
 if __name__ == '__main__':

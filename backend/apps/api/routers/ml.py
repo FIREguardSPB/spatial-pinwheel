@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from apps.api.deps import verify_token
+from core.ml.attribution import build_ml_attribution_report
 from core.ml.dataset import build_training_datasets
 from core.ml.runtime import build_ml_runtime_status, train_ml_models
 from core.storage.repos.settings import get_settings
@@ -30,6 +31,16 @@ async def get_ml_dataset(
         'datasets': {target: dataset.to_payload(limit=sample_limit) for target, dataset in datasets.items()},
     }
 
+
+
+
+@router.get('/attribution')
+async def get_ml_attribution(
+    days: int = Query(30, ge=1, le=180),
+    limit: int = Query(50, ge=5, le=500),
+    db: Session = Depends(get_db),
+):
+    return build_ml_attribution_report(db, days=days, limit=limit)
 
 @router.post('/train')
 async def trigger_ml_training(

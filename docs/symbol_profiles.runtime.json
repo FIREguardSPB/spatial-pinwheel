@@ -225,7 +225,7 @@
       "updated_ts": 1775869401799
     },
     "TQBR:ALRS": {
-      "aggressiveness": 0.893,
+      "aggressiveness": 0.8394,
       "autotune": true,
       "best_hours_json": [],
       "blocked_hours_json": [],
@@ -237,24 +237,24 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:ALRS",
-      "last_hold_bars": 19,
-      "last_regime": "compression",
+      "last_hold_bars": 27,
+      "last_regime": "trend",
       "last_strategy": "mean_reversion",
-      "last_threshold": 39,
+      "last_threshold": 42,
       "last_tuned_ts": 0,
       "last_win_rate": 0.0,
       "news_sensitivity": 1.1,
-      "notes": "offline trainer (90d/1m) regime=unknown candles=0",
+      "notes": "offline trainer (180d/1m) regime=unknown candles=0",
       "preferred_side": "both",
       "preferred_strategies": "mean_reversion",
       "profile_version": 3,
-      "reentry_cooldown_sec": 33,
+      "reentry_cooldown_sec": 39,
       "regime_bias": "",
       "risk_multiplier": 0.75,
       "sample_size": 1,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023005403
+      "updated_ts": 1776059490945
     },
     "TQBR:BSPB": {
       "aggressiveness": 0.95,
@@ -280,13 +280,13 @@
       "preferred_side": "both",
       "preferred_strategies": "breakout,mean_reversion,vwap_bounce",
       "profile_version": 3,
-      "reentry_cooldown_sec": 432,
+      "reentry_cooldown_sec": 518,
       "regime_bias": "",
-      "risk_multiplier": 0.7618,
+      "risk_multiplier": 0.75,
       "sample_size": 0,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023540897
+      "updated_ts": 1776059369065
     },
     "TQBR:CHMF": {
       "aggressiveness": 1.0474,
@@ -302,9 +302,9 @@
       "hold_bars_min": 4,
       "instrument_id": "TQBR:CHMF",
       "last_hold_bars": 11,
-      "last_regime": "balanced",
-      "last_strategy": "breakout",
-      "last_threshold": 46,
+      "last_regime": "compression",
+      "last_strategy": "mean_reversion",
+      "last_threshold": 37,
       "last_tuned_ts": 0,
       "last_win_rate": 1.0,
       "news_sensitivity": 1.1,
@@ -318,7 +318,7 @@
       "sample_size": 2,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776024076851
+      "updated_ts": 1776057920262
     },
     "TQBR:CHMK": {
       "aggressiveness": 0.95,
@@ -333,10 +333,10 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:CHMK",
-      "last_hold_bars": 64,
-      "last_regime": "expansion_trend",
-      "last_strategy": "breakout",
-      "last_threshold": 32,
+      "last_hold_bars": 62,
+      "last_regime": "grind",
+      "last_strategy": "vwap_bounce",
+      "last_threshold": 40,
       "last_tuned_ts": 0,
       "last_win_rate": null,
       "news_sensitivity": 1.1,
@@ -350,7 +350,7 @@
       "sample_size": 0,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1775925453521
+      "updated_ts": 1776055128205
     },
     "TQBR:CNTL": {
       "aggressiveness": 1.0474,
@@ -397,10 +397,10 @@
       "hold_bars_max": 34,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:DIAS",
-      "last_hold_bars": 32,
-      "last_regime": "grind",
-      "last_strategy": "vwap_bounce",
-      "last_threshold": 45,
+      "last_hold_bars": 30,
+      "last_regime": "balanced",
+      "last_strategy": "breakout",
+      "last_threshold": 46,
       "last_tuned_ts": 0,
       "last_win_rate": 0.0,
       "news_sensitivity": 1.1,
@@ -414,7 +414,7 @@
       "sample_size": 5,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776015972235
+      "updated_ts": 1776058544668
     },
     "TQBR:ELFV": {
       "aggressiveness": 0.8394,
@@ -429,10 +429,10 @@
       "hold_bars_max": 26,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:ELFV",
-      "last_hold_bars": 6,
-      "last_regime": "grind",
-      "last_strategy": "vwap_bounce",
-      "last_threshold": 40,
+      "last_hold_bars": 4,
+      "last_regime": "balanced",
+      "last_strategy": "breakout",
+      "last_threshold": 42,
       "last_tuned_ts": 0,
       "last_win_rate": 0.3333,
       "news_sensitivity": 1.1,
@@ -446,7 +446,7 @@
       "sample_size": 3,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1775939334338
+      "updated_ts": 1776057593875
     },
     "TQBR:GAZP": {
       "aggressiveness": 1.1,
@@ -461,10 +461,10 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:GAZP",
-      "last_hold_bars": 60,
-      "last_regime": "balanced",
-      "last_strategy": "breakout",
-      "last_threshold": 40,
+      "last_hold_bars": 57,
+      "last_regime": "compression",
+      "last_strategy": "vwap_bounce",
+      "last_threshold": 44,
       "last_tuned_ts": 0,
       "last_win_rate": null,
       "news_sensitivity": 0.95,
@@ -478,7 +478,7 @@
       "sample_size": 0,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023857480
+      "updated_ts": 1776059852487
     },
     "TQBR:GMKN": {
       "aggressiveness": 0.8074,
@@ -496,7 +496,7 @@
       "last_hold_bars": 4,
       "last_regime": "balanced",
       "last_strategy": "mean_reversion",
-      "last_threshold": 37,
+      "last_threshold": 38,
       "last_tuned_ts": 0,
       "last_win_rate": 0.3333,
       "news_sensitivity": 0.95,
@@ -510,7 +510,7 @@
       "sample_size": 3,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023813764
+      "updated_ts": 1776059538413
     },
     "TQBR:IRAO": {
       "aggressiveness": 0.95,
@@ -525,10 +525,10 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:IRAO",
-      "last_hold_bars": 57,
-      "last_regime": "compression",
-      "last_strategy": "mean_reversion",
-      "last_threshold": 37,
+      "last_hold_bars": 60,
+      "last_regime": "balanced",
+      "last_strategy": "breakout",
+      "last_threshold": 42,
       "last_tuned_ts": 0,
       "last_win_rate": null,
       "news_sensitivity": 1.1,
@@ -542,7 +542,7 @@
       "sample_size": 0,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023067236
+      "updated_ts": 1776059539819
     },
     "TQBR:KAZT": {
       "aggressiveness": 0.8,
@@ -606,7 +606,7 @@
       "sample_size": 1,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023207380
+      "updated_ts": 1776057594178
     },
     "TQBR:KZOS": {
       "aggressiveness": 0.9846,
@@ -621,10 +621,10 @@
       "hold_bars_max": 22,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:KZOS",
-      "last_hold_bars": 4,
-      "last_regime": "chop",
-      "last_strategy": "mean_reversion",
-      "last_threshold": 37,
+      "last_hold_bars": 11,
+      "last_regime": "expansion_trend",
+      "last_strategy": "breakout",
+      "last_threshold": 32,
       "last_tuned_ts": 0,
       "last_win_rate": 0.4,
       "news_sensitivity": 1.1,
@@ -638,7 +638,7 @@
       "sample_size": 5,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776020513279
+      "updated_ts": 1776057594328
     },
     "TQBR:LKOH": {
       "aggressiveness": 1.1,
@@ -653,10 +653,10 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:LKOH",
-      "last_hold_bars": 57,
-      "last_regime": "compression",
-      "last_strategy": "vwap_bounce",
-      "last_threshold": 44,
+      "last_hold_bars": 60,
+      "last_regime": "balanced",
+      "last_strategy": "breakout",
+      "last_threshold": 38,
       "last_tuned_ts": 0,
       "last_win_rate": null,
       "news_sensitivity": 0.95,
@@ -670,7 +670,7 @@
       "sample_size": 0,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023813359
+      "updated_ts": 1776059357628
     },
     "TQBR:LNZL": {
       "aggressiveness": 0.95,
@@ -766,7 +766,7 @@
       "sample_size": 1,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023237174
+      "updated_ts": 1776059414053
     },
     "TQBR:MOEX": {
       "aggressiveness": 1.1,
@@ -781,9 +781,9 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:MOEX",
-      "last_hold_bars": 64,
-      "last_regime": "trend",
-      "last_strategy": "vwap_bounce",
+      "last_hold_bars": 60,
+      "last_regime": "balanced",
+      "last_strategy": "mean_reversion",
       "last_threshold": 38,
       "last_tuned_ts": 0,
       "last_win_rate": null,
@@ -798,7 +798,7 @@
       "sample_size": 0,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776022146390
+      "updated_ts": 1776059535916
     },
     "TQBR:MRKV": {
       "aggressiveness": 0.8,
@@ -813,10 +813,10 @@
       "hold_bars_max": 22,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:MRKV",
-      "last_hold_bars": 5,
-      "last_regime": "grind",
-      "last_strategy": "vwap_bounce",
-      "last_threshold": 40,
+      "last_hold_bars": 4,
+      "last_regime": "compression",
+      "last_strategy": "mean_reversion",
+      "last_threshold": 38,
       "last_tuned_ts": 0,
       "last_win_rate": 0.4,
       "news_sensitivity": 1.1,
@@ -830,10 +830,10 @@
       "sample_size": 5,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776020111588
+      "updated_ts": 1776059477518
     },
     "TQBR:MSNG": {
-      "aggressiveness": 0.893,
+      "aggressiveness": 0.8394,
       "autotune": true,
       "best_hours_json": [],
       "blocked_hours_json": [],
@@ -852,17 +852,17 @@
       "last_tuned_ts": 0,
       "last_win_rate": 0.0,
       "news_sensitivity": 1.1,
-      "notes": "offline trainer (90d/1m) regime=unknown candles=0",
+      "notes": "offline trainer (180d/1m) regime=unknown candles=0",
       "preferred_side": "both",
       "preferred_strategies": "breakout,mean_reversion,vwap_bounce",
       "profile_version": 3,
-      "reentry_cooldown_sec": 518,
+      "reentry_cooldown_sec": 621,
       "regime_bias": "",
       "risk_multiplier": 0.75,
       "sample_size": 1,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776019970933
+      "updated_ts": 1776059508433
     },
     "TQBR:MSRS": {
       "aggressiveness": 0.893,
@@ -877,10 +877,10 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:MSRS",
-      "last_hold_bars": 16,
-      "last_regime": "expansion_trend",
-      "last_strategy": "breakout",
-      "last_threshold": 33,
+      "last_hold_bars": 5,
+      "last_regime": "compression",
+      "last_strategy": "mean_reversion",
+      "last_threshold": 37,
       "last_tuned_ts": 0,
       "last_win_rate": 0.5,
       "news_sensitivity": 1.1,
@@ -894,7 +894,7 @@
       "sample_size": 2,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776013495879
+      "updated_ts": 1776058498031
     },
     "TQBR:MSTT": {
       "aggressiveness": 0.8,
@@ -941,8 +941,8 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:MTSS",
-      "last_hold_bars": 64,
-      "last_regime": "trend",
+      "last_hold_bars": 60,
+      "last_regime": "balanced",
       "last_strategy": "vwap_bounce",
       "last_threshold": 38,
       "last_tuned_ts": 0,
@@ -958,7 +958,7 @@
       "sample_size": 0,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776022793337
+      "updated_ts": 1776059491054
     },
     "TQBR:NSVZ": {
       "aggressiveness": 0.8,
@@ -990,7 +990,7 @@
       "sample_size": 3,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1775955936548
+      "updated_ts": 1776058498247
     },
     "TQBR:NVTK": {
       "aggressiveness": 1.155,
@@ -1005,10 +1005,10 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:NVTK",
-      "last_hold_bars": 41,
-      "last_regime": "compression",
-      "last_strategy": "vwap_bounce",
-      "last_threshold": 45,
+      "last_hold_bars": 44,
+      "last_regime": "balanced",
+      "last_strategy": "breakout",
+      "last_threshold": 38,
       "last_tuned_ts": 0,
       "last_win_rate": 1.0,
       "news_sensitivity": 0.95,
@@ -1022,7 +1022,7 @@
       "sample_size": 1,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776024013849
+      "updated_ts": 1776059475853
     },
     "TQBR:OGKB": {
       "aggressiveness": 1.0998,
@@ -1037,10 +1037,10 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:OGKB",
-      "last_hold_bars": 61,
-      "last_regime": "balanced",
-      "last_strategy": "breakout",
-      "last_threshold": 46,
+      "last_hold_bars": 64,
+      "last_regime": "grind",
+      "last_strategy": "vwap_bounce",
+      "last_threshold": 40,
       "last_tuned_ts": 0,
       "last_win_rate": 0.5,
       "news_sensitivity": 1.1,
@@ -1054,7 +1054,7 @@
       "sample_size": 4,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776021617704
+      "updated_ts": 1776058498360
     },
     "TQBR:PHOR": {
       "aggressiveness": 0.95,
@@ -1072,7 +1072,7 @@
       "last_hold_bars": 60,
       "last_regime": "balanced",
       "last_strategy": "breakout",
-      "last_threshold": 44,
+      "last_threshold": 42,
       "last_tuned_ts": 0,
       "last_win_rate": null,
       "news_sensitivity": 1.1,
@@ -1086,7 +1086,7 @@
       "sample_size": 0,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023501348
+      "updated_ts": 1776059354988
     },
     "TQBR:PLZL": {
       "aggressiveness": 0.9975,
@@ -1118,7 +1118,7 @@
       "sample_size": 2,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023997470
+      "updated_ts": 1776059357841
     },
     "TQBR:POLY": {
       "aggressiveness": 0.95,
@@ -1165,10 +1165,10 @@
       "hold_bars_max": 22,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:RASP",
-      "last_hold_bars": 14,
-      "last_regime": "balanced",
+      "last_hold_bars": 19,
+      "last_regime": "trend",
       "last_strategy": "breakout",
-      "last_threshold": 42,
+      "last_threshold": 35,
       "last_tuned_ts": 0,
       "last_win_rate": 0.0,
       "news_sensitivity": 1.1,
@@ -1182,7 +1182,7 @@
       "sample_size": 2,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776019935189
+      "updated_ts": 1776055215367
     },
     "TQBR:ROSN": {
       "aggressiveness": 0.972,
@@ -1200,7 +1200,7 @@
       "last_hold_bars": 14,
       "last_regime": "compression",
       "last_strategy": "vwap_bounce",
-      "last_threshold": 46,
+      "last_threshold": 44,
       "last_tuned_ts": 0,
       "last_win_rate": 0.0,
       "news_sensitivity": 0.95,
@@ -1214,7 +1214,7 @@
       "sample_size": 1,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776021254596
+      "updated_ts": 1776057632030
     },
     "TQBR:RUAL": {
       "aggressiveness": 0.8,
@@ -1230,9 +1230,9 @@
       "hold_bars_min": 4,
       "instrument_id": "TQBR:RUAL",
       "last_hold_bars": 64,
-      "last_regime": "balanced",
-      "last_strategy": "breakout",
-      "last_threshold": 48,
+      "last_regime": "compression",
+      "last_strategy": "mean_reversion",
+      "last_threshold": 42,
       "last_tuned_ts": 0,
       "last_win_rate": 0.2,
       "news_sensitivity": 1.1,
@@ -1246,7 +1246,7 @@
       "sample_size": 5,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023814270
+      "updated_ts": 1776058538332
     },
     "TQBR:SBER": {
       "aggressiveness": 1.1,
@@ -1261,10 +1261,10 @@
       "hold_bars_max": 64,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:SBER",
-      "last_hold_bars": 57,
-      "last_regime": "compression",
-      "last_strategy": "mean_reversion",
-      "last_threshold": 32,
+      "last_hold_bars": 60,
+      "last_regime": "balanced",
+      "last_strategy": "vwap_bounce",
+      "last_threshold": 38,
       "last_tuned_ts": 0,
       "last_win_rate": null,
       "news_sensitivity": 0.95,
@@ -1278,7 +1278,7 @@
       "sample_size": 0,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023857352
+      "updated_ts": 1776059852364
     },
     "TQBR:SNGSP": {
       "aggressiveness": 0.9376,
@@ -1293,10 +1293,10 @@
       "hold_bars_max": 22,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:SNGSP",
-      "last_hold_bars": 4,
-      "last_regime": "compression",
-      "last_strategy": "mean_reversion",
-      "last_threshold": 39,
+      "last_hold_bars": 9,
+      "last_regime": "trend",
+      "last_strategy": "breakout",
+      "last_threshold": 34,
       "last_tuned_ts": 0,
       "last_win_rate": 0.3333,
       "news_sensitivity": 1.1,
@@ -1310,7 +1310,7 @@
       "sample_size": 3,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023080486
+      "updated_ts": 1776059853109
     },
     "TQBR:SVAV": {
       "aggressiveness": 0.8,
@@ -1328,7 +1328,7 @@
       "last_hold_bars": 35,
       "last_regime": "trend",
       "last_strategy": "breakout",
-      "last_threshold": 37,
+      "last_threshold": 35,
       "last_tuned_ts": 0,
       "last_win_rate": 0.0,
       "news_sensitivity": 1.1,
@@ -1342,7 +1342,7 @@
       "sample_size": 3,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023113760
+      "updated_ts": 1776059358608
     },
     "TQBR:TATN": {
       "aggressiveness": 0.9137,
@@ -1357,10 +1357,10 @@
       "hold_bars_max": 34,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:TATN",
-      "last_hold_bars": 27,
-      "last_regime": "compression",
-      "last_strategy": "vwap_bounce",
-      "last_threshold": 44,
+      "last_hold_bars": 34,
+      "last_regime": "trend",
+      "last_strategy": "breakout",
+      "last_threshold": 31,
       "last_tuned_ts": 0,
       "last_win_rate": 0.0,
       "news_sensitivity": 0.95,
@@ -1374,7 +1374,7 @@
       "sample_size": 2,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023936055
+      "updated_ts": 1776059880295
     },
     "TQBR:TGKA": {
       "aggressiveness": 0.9975,
@@ -1406,7 +1406,7 @@
       "sample_size": 1,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776019575537
+      "updated_ts": 1776058498776
     },
     "TQBR:VTBR": {
       "aggressiveness": 0.95,
@@ -1438,7 +1438,7 @@
       "sample_size": 0,
       "session_bias": "main",
       "source": "offline_training",
-      "updated_ts": 1776023896017
+      "updated_ts": 1776059852596
     },
     "TQBR:YAKG": {
       "aggressiveness": 0.8,
@@ -1447,17 +1447,17 @@
       "blocked_hours_json": [],
       "confidence_bias": 0.96,
       "created_ts": 1774876872569,
-      "decision_threshold_offset": -6,
+      "decision_threshold_offset": -2,
       "enabled": true,
-      "hold_bars_base": 14,
+      "hold_bars_base": 18,
       "hold_bars_max": 22,
       "hold_bars_min": 4,
       "instrument_id": "TQBR:YAKG",
-      "last_hold_bars": 20,
-      "last_regime": "expansion_trend",
+      "last_hold_bars": 22,
+      "last_regime": "trend",
       "last_strategy": "breakout",
-      "last_threshold": 33,
-      "last_tuned_ts": 1776022793493,
+      "last_threshold": 37,
+      "last_tuned_ts": 1776058931639,
       "last_win_rate": 0.0,
       "news_sensitivity": 1.1,
       "notes": "auto-tuned from 10 recent closes",
@@ -1470,7 +1470,7 @@
       "sample_size": 10,
       "session_bias": "main",
       "source": "online_recalibration",
-      "updated_ts": 1776022793565
+      "updated_ts": 1776059358719
     },
     "TQBR:YNDX": {
       "aggressiveness": 0.9137,

@@ -61,6 +61,11 @@ export const mockSettings = {
   bot_enabled: false,
 };
 
+export const mockPresets = [
+  { id: 'preset_system_balanced', name: 'Balanced', description: 'Baseline paper preset', settings_json: { risk_profile: 'balanced', trade_mode: 'auto_paper', ai_mode: 'advisory', rr_min: 1.5, rr_target: 1.4, watchlist: ['TQBR:SBER'] }, created_at: Date.now() - 86400000, updated_at: Date.now() - 86400000, is_system: true },
+  { id: 'preset_user_sniper', name: 'Sniper intraday', description: 'Жёсткий пользовательский профиль', settings_json: { risk_profile: 'conservative', ai_mode: 'advisory', rr_min: 1.8, max_trades_per_day: 20, watchlist: ['TQBR:SBER'] }, created_at: Date.now() - 3600000, updated_at: Date.now() - 1800000, is_system: false },
+];
+
 export const mockBotStatus = {
   is_running: false,
   mode: 'auto_paper',
@@ -179,6 +184,12 @@ export const handlers = [
   http.get('/api/v1/settings/trading-schedule', () => HttpResponse.json(mockTradingSchedule)),
   http.post('/api/v1/settings/trading-schedule/sync', () => HttpResponse.json(mockTradingSchedule)),
   http.post('/api/v1/settings/telegram/test-send', () => HttpResponse.json({ ok: true })),
+  http.get('/api/v1/settings/presets', () => HttpResponse.json({ items: mockPresets })),
+  http.post('/api/v1/settings/presets', async ({ request }: any) => { const body = await request.json() as { name?: string; description?: string }; return HttpResponse.json({ preset: { id: `preset_${(body.name || 'custom').toLowerCase().replace(/[^a-z0-9]+/g, '_')}`, name: body.name || 'Custom', description: body.description || '', settings_json: { ...mockSettings, watchlist: mockWatchlist.map((item) => item.instrument_id) }, created_at: Date.now(), updated_at: Date.now(), is_system: false }, created: true }); }),
+  http.get('/api/v1/settings/presets/:id', ({ params }: any) => { const preset = mockPresets.find((item) => item.id === params.id) || mockPresets[0]; return HttpResponse.json({ preset }); }),
+  http.put('/api/v1/settings/presets/:id', async ({ params, request }: any) => { const body = await request.json(); const preset = mockPresets.find((item) => item.id === params.id) || mockPresets[0]; return HttpResponse.json({ preset: { ...preset, ...(body as object), updated_at: Date.now() } }); }),
+  http.delete('/api/v1/settings/presets/:id', ({ params }: any) => HttpResponse.json({ ok: true, deleted: params.id })),
+  http.post('/api/v1/settings/presets/:id/apply', ({ params }: any) => { const preset = mockPresets.find((item) => item.id === params.id) || mockPresets[0]; return HttpResponse.json({ ok: true, preset, applied: { changed_keys: ['risk_profile'], diff_summary: ['Профиль риска: balanced → conservative'] } }); }),
 
   http.get('/api/v1/bot/status', () => HttpResponse.json(mockBotStatus)),
   http.post('/api/v1/bot/start', () => HttpResponse.json({ ...mockBotStatus, is_running: true })),

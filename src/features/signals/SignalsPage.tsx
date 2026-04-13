@@ -95,8 +95,12 @@ function describeMl(signal: Signal) {
   if (!Object.keys(ml).length) return 'данных нет';
   const target = typeof ml?.target_probability === 'number' ? fmtPercent(ml.target_probability * 100) : '—';
   const fill = typeof ml?.fill_probability === 'number' ? fmtPercent(ml.fill_probability * 100) : '—';
+  const action = ml?.action || 'observe';
   const reason = ml?.reason || 'runtime';
-  return `target ${target} / fill ${fill} · ${reason}`;
+  const targetModel = typeof ml?.target_model_id === 'string' ? ml.target_model_id.replace(/^ml_/, '').slice(0, 8) : '';
+  const fillModel = typeof ml?.fill_model_id === 'string' ? ml.fill_model_id.replace(/^ml_/, '').slice(0, 8) : '';
+  const models = [targetModel, fillModel].filter(Boolean).join('/');
+  return `target ${target} / fill ${fill} · ${action} · ${reason}${models ? ` · ${models}` : ''}`;
 }
 
 function deriveMlProgress(runtime: any) {
@@ -105,12 +109,14 @@ function deriveMlProgress(runtime: any) {
   const recentRuns = Array.isArray(ml?.recent_runs) ? ml.recent_runs : [];
   const latestFor = (target: string) => recentRuns.find((run: any) => run?.target === target) || null;
   const build = (target: string) => {
-    const run = latestFor(target) || {};
+    const run = latestFor(target) || ml?.active_models?.[target] || {};
     const rows = Number(run?.train_rows || 0);
     return {
       rows,
       remaining: Math.max(0, minSamples - rows),
       status: String(run?.status || ml?.active_models?.[target]?.status || 'missing'),
+      ts: typeof run?.ts === 'number' ? run.ts : null,
+      freshnessHours: typeof run?.freshness_hours === 'number' ? run.freshness_hours : null,
     };
   };
   return {
@@ -172,11 +178,11 @@ export default function SignalsPage() {
         <Surface title="ML слой"><div className="text-2xl font-semibold text-sky-300">{fmtNumber(summary.ml_seen ?? 0, 0)}</div></Surface>
         <Surface title="ML trade_outcome">
           <div className="text-xl font-semibold text-white">{fmtNumber(mlProgress.tradeOutcome.rows, 0)} / {fmtNumber(mlProgress.minSamples, 0)}</div>
-          <div className="mt-1 text-xs text-gray-400">осталось {fmtNumber(mlProgress.tradeOutcome.remaining, 0)} · {mlProgress.tradeOutcome.status}</div>
+          <div className="mt-1 text-xs text-gray-400">осталось {fmtNumber(mlProgress.tradeOutcome.remaining, 0)} · {mlProgress.tradeOutcome.status}{mlProgress.tradeOutcome.ts ? ` · train ${fmtDateTime(mlProgress.tradeOutcome.ts)}` : ''}{mlProgress.tradeOutcome.freshnessHours != null ? ` · age ${fmtNumber(mlProgress.tradeOutcome.freshnessHours, 1)}h` : ''}</div>
         </Surface>
         <Surface title="ML take_fill">
           <div className="text-xl font-semibold text-white">{fmtNumber(mlProgress.takeFill.rows, 0)} / {fmtNumber(mlProgress.minSamples, 0)}</div>
-          <div className="mt-1 text-xs text-gray-400">осталось {fmtNumber(mlProgress.takeFill.remaining, 0)} · {mlProgress.takeFill.status}</div>
+          <div className="mt-1 text-xs text-gray-400">осталось {fmtNumber(mlProgress.takeFill.remaining, 0)} · {mlProgress.takeFill.status}{mlProgress.takeFill.ts ? ` · train ${fmtDateTime(mlProgress.takeFill.ts)}` : ''}{mlProgress.takeFill.freshnessHours != null ? ` · age ${fmtNumber(mlProgress.takeFill.freshnessHours, 1)}h` : ''}</div>
         </Surface>
         <Surface title="Последний сигнал"><div className="text-sm font-medium text-white">{fmtDateTime((summary as any).latest_signal_ts)}</div></Surface>
       </div>

@@ -147,3 +147,11 @@ apiClient.interceptors.response.use(
         return Promise.reject(error);
     }
 );
+
+
+export async function listSettingsPresets() { const { data } = await apiClient.get('/settings/presets'); return data; }
+export async function createSettingsPreset(payload: { name: string; description?: string }) { const { data } = await apiClient.post('/settings/presets', payload); return data; }
+export async function getSettingsPreset(id: string) { const { data } = await apiClient.get(`/settings/presets/${encodeURIComponent(id)}`); return data; }
+export async function updateSettingsPreset(id: string, payload: { name?: string; description?: string; settings_json?: Record<string, any> }) { const { data } = await apiClient.put(`/settings/presets/${encodeURIComponent(id)}`, payload); return data; }
+export async function deleteSettingsPreset(id: string) { const { data } = await apiClient.delete(`/settings/presets/${encodeURIComponent(id)}`); return data; }
+export async function applySettingsPreset(id: string) { const { data } = await apiClient.post(`/settings/presets/${encodeURIComponent(id)}/apply`); return data; }

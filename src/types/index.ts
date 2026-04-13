@@ -359,6 +359,38 @@ export interface RiskSettings {
     symbol_recalibration_lookback_days?: number;
 }
 
+export interface SettingsPreset {
+    id: string;
+    name: string;
+    description?: string;
+    settings_json: Record<string, any>;
+    created_at: number;
+    updated_at: number;
+    is_system: boolean;
+}
+
+export interface SettingsPresetListResponse {
+    items: SettingsPreset[];
+}
+
+export interface SettingsPresetMutationResponse {
+    preset: SettingsPreset;
+    created?: boolean | null;
+}
+
+export interface SettingsPresetApplyResponse {
+    ok: boolean;
+    preset: SettingsPreset;
+    applied: {
+        changed_keys: string[];
+        diff_summary: string[];
+        changed_count?: number;
+        watchlist?: { added: string[]; removed: string[]; kept: string[] };
+        applied_settings_updated_ts?: number;
+    };
+}
+
+
 export interface BusinessMetrics {
     total_pnl: number;
     daily_pnl: number;
