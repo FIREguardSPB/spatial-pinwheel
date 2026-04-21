@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from apps.worker.processor_support import _build_conviction_profile, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip
+from apps.worker.processor_support import _build_conviction_profile, _build_pre_persist_review_enrichment, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip
 
 
 class ProcessorSelectiveThrottleTests(unittest.TestCase):
@@ -27,6 +27,26 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         self.assertEqual(seed['thesis_type'], 'continuation')
         self.assertEqual(seed['structure'], 'near_low_break_continuation')
         self.assertEqual(seed['initial_rr'], 1.8)
+
+    def test_pre_persist_review_enrichment_marks_strong_higher_tf_candidate(self):
+        enrichment = _build_pre_persist_review_enrichment({
+            'side': 'SELL',
+            'r': 2.0,
+            'meta': {
+                'strategy_name': 'breakout',
+                'thesis_timeframe': '15m',
+                'timeframe_selection_reason': 'requested',
+                'higher_tf_thesis': {
+                    'thesis_timeframe': '15m',
+                    'thesis_type': 'continuation',
+                    'structure': 'near_low_break_continuation',
+                    'side': 'SELL',
+                },
+            },
+        }, block_reason='selective throttle keeps only TAKE candidates during frozen mode')
+        self.assertEqual(enrichment['conviction_profile']['tier'], 'B')
+        self.assertTrue(enrichment['conviction_profile']['tradable'])
+        self.assertEqual(enrichment['review_readiness']['thesis_timeframe'], '15m')
 
     def test_blocks_non_take_candidates_in_frozen_mode(self):
         blocked, reason = _evaluate_selective_policy_throttle(

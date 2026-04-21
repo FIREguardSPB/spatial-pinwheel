@@ -64,6 +64,7 @@ from apps.worker.processor_support import (
     _build_signal_pipeline_payload,
     _apply_geometry_pass,
     _build_candles_summary,
+    _build_pre_persist_review_enrichment,
     _build_review_readiness_seed,
     _evaluate_selective_policy_throttle,
     _promote_high_conviction_skip,
@@ -233,6 +234,7 @@ class SignalProcessor:
                 'freshness_reason': None,
                 'event_adjusted_score': None,
             }
+            sig_meta.update(_build_pre_persist_review_enrichment(sig_data, block_reason=risk_reason))
             sig_data['meta'] = sig_meta
             sig_data['status'] = 'rejected'
             sig_data['reason'] = risk_reason
@@ -303,6 +305,7 @@ class SignalProcessor:
                     'freshness_reason': None,
                     'event_adjusted_score': None,
                 }
+                sig_meta.update(_build_pre_persist_review_enrichment(sig_data, block_reason=risk_reason))
                 sig_data['meta'] = sig_meta
                 sig_data['status'] = 'rejected'
                 sig_data['reason'] = risk_reason
@@ -403,6 +406,7 @@ class SignalProcessor:
                 'freshness_reason': None,
                 'event_adjusted_score': None,
             }
+            sig_meta.update(_build_pre_persist_review_enrichment(sig_data, block_reason=risk_reason))
             sig_data['meta'] = sig_meta
             sig_data['status'] = 'rejected'
             sig_data['reason'] = risk_reason

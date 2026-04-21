@@ -135,6 +135,33 @@ def _build_review_readiness_seed(sig_data: dict) -> dict:
     }
 
 
+def _build_pre_persist_review_enrichment(sig_data: dict, *, block_reason: str) -> dict:
+    meta = dict((sig_data or {}).get('meta') or {})
+    thesis = dict(meta.get('higher_tf_thesis') or {}) if isinstance(meta.get('higher_tf_thesis'), dict) else {}
+    thesis_tf = str(meta.get('thesis_timeframe') or thesis.get('thesis_timeframe') or '1m')
+    rr_value = float((sig_data or {}).get('r') or 0.0)
+    tier = 'B' if thesis_tf in {'5m', '15m', '30m', '1h'} and rr_value >= 1.6 else 'C'
+    return {
+        'review_readiness': _build_review_readiness_seed(sig_data),
+        'conviction_profile': {
+            'tier': tier,
+            'score': None,
+            'threshold': None,
+            'score_gap': None,
+            'tradable': tier == 'B',
+            'rescue_eligible': False,
+            'blocked_by_pre_persist_gate': True,
+            'block_reason': block_reason,
+        },
+        'decision_merge': {
+            'pre_ai_final_decision': 'REJECT',
+            'event_merge_reason': block_reason,
+            'freshness_reason': None,
+            'event_adjusted_score': None,
+        },
+    }
+
+
 def _evaluate_selective_policy_throttle(*, policy_state: Any, final_decision: str, score: int, threshold: int, sig_data: dict, perf_governor: dict, freshness_meta: dict) -> tuple[bool, str]:
     if not bool(getattr(policy_state, 'selective_throttle', False)):
         return False, ''
