@@ -68,7 +68,7 @@ class PipelineCountersRuntimeTests(unittest.TestCase):
         module.Trade = _TradeModel
         module.DecisionLog = _DecisionLogModel
         try:
-            db = _FakeDB(signal_counts=[12, 3, 1], trade_count=2, log_counts=[4, 7, 5])
+            db = _FakeDB(signal_counts=[12, 3, 2, 1], trade_count=2, log_counts=[4, 7, 5])
             payload = build_pipeline_counters_summary(db, 24)
         finally:
             module.Signal = orig_signal
@@ -77,6 +77,8 @@ class PipelineCountersRuntimeTests(unittest.TestCase):
 
         self.assertEqual(payload['signals_created'], 12)
         self.assertEqual(payload['signals_progressed'], 3)
+        self.assertEqual(payload['pending_review'], 2)
+        self.assertGreater(payload['progression_rate'], 0)
         self.assertEqual(payload['execution_errors'], 1)
         self.assertEqual(payload['risk_blocks'], 4)
         self.assertEqual(payload['cooldown_aware_proceeds'], 7)
