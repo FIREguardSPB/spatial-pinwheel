@@ -84,6 +84,46 @@ def _outcome_feedback_bonus(db: Session, signal: Signal, *, lookback_hours: int 
     return bonus
 
 
+def _symbol_thesis_learning_bias(db: Session, signal: Signal, *, lookback_hours: int = 24) -> int:
+    meta = dict(getattr(signal, 'meta', None) or {})
+    review = dict(meta.get('review_readiness') or {})
+    thesis_tf = str(review.get('thesis_timeframe') or '')
+    thesis_type = str(review.get('thesis_type') or '')
+    instrument_id = str(getattr(signal, 'instrument_id', '') or '')
+    if not thesis_tf or not thesis_type or not instrument_id:
+        return 0
+    cutoff = int(time.time() * 1000) - int(max(1, lookback_hours)) * 60 * 60 * 1000
+    rows = (
+        db.query(DecisionLog)
+        .filter(DecisionLog.ts >= cutoff, DecisionLog.type.in_(['trade_filled', 'position_closed']))
+        .all()
+    )
+    bonus = 0
+    for row in rows:
+        payload = dict(getattr(row, 'payload', None) or {})
+        seed = dict(payload.get('execution_quality_seed') or {})
+        seed_review = dict(seed.get('review_readiness') or {})
+        conviction = dict(payload.get('conviction_profile') or {})
+        payload_tf = str(seed.get('thesis_timeframe') or conviction.get('thesis_timeframe') or '')
+        payload_type = str(seed_review.get('thesis_type') or '')
+        payload_instrument = str(payload.get('instrument_id') or '')
+        if payload_tf != thesis_tf or payload_type != thesis_type or payload_instrument != instrument_id:
+            continue
+        if str(getattr(row, 'type', '')) == 'trade_filled':
+            if str(seed.get('fill_quality_status') or '') == 'ok':
+                bonus += 20
+            elif str(seed.get('fill_quality_status') or '') == 'anomaly':
+                bonus -= 12
+        else:
+            net_pnl = _safe_float(payload.get('net_pnl'), 0.0)
+            reason = str(payload.get('reason') or '').upper()
+            if net_pnl > 0 and reason in {'TP', 'TIME_STOP', 'SESSION_END'}:
+                bonus += 18
+            elif net_pnl < 0 or reason in {'THESIS_DECAY', 'SL', 'STOP'}:
+                bonus -= 12
+    return bonus
+
+
 def list_signals(db: Session, limit: int = 50, status: str = None) -> List[Signal]:
     query = db.query(Signal)
     if status:
@@ -108,8 +148,8 @@ def get_top_pending_review_candidate(db: Session, *, ttl_sec: int = 900) -> Opti
         if bool(review.get('approval_candidate')):
             approval_rows.append(row)
     if approval_rows:
-        return max(approval_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row) + _outcome_feedback_bonus(db, row)))
-    return max(fresh_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row) + _outcome_feedback_bonus(db, row)))
+        return max(approval_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row) + _outcome_feedback_bonus(db, row) + _symbol_thesis_learning_bias(db, row)))
+    return max(fresh_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row) + _outcome_feedback_bonus(db, row) + _symbol_thesis_learning_bias(db, row)))
 
 
 def get_signal(db: Session, signal_id: str) -> Optional[Signal]:
