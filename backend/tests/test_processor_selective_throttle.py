@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from apps.worker.processor_support import _build_conviction_profile, _build_pending_review_outcome_seed, _build_pre_persist_review_enrichment, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip, _should_relax_governor_suppression
+from apps.worker.processor_support import _build_conviction_profile, _build_pending_review_outcome_seed, _build_pre_persist_review_enrichment, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip, _reconcile_review_readiness, _should_relax_governor_suppression
 
 
 class ProcessorSelectiveThrottleTests(unittest.TestCase):
@@ -109,6 +109,14 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         }, trade_mode='auto_paper')
         self.assertFalse(seed['approval_candidate'])
         self.assertEqual(seed['approval_reason'], 'review_only_pending_candidate')
+
+    def test_reconcile_review_readiness_demotes_candidate_after_hard_blockers(self):
+        reconciled = _reconcile_review_readiness(
+            {'approval_candidate': True, 'approval_reason': 'higher_tf_strong_pending_candidate'},
+            {'tier': 'C', 'has_blockers': True, 'economic_filter_valid': False},
+        )
+        self.assertFalse(reconciled['approval_candidate'])
+        self.assertEqual(reconciled['approval_reason'], 'demoted_after_decision_flow')
 
     def test_blocks_non_take_candidates_in_frozen_mode(self):
         blocked, reason = _evaluate_selective_policy_throttle(

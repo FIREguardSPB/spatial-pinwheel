@@ -175,6 +175,17 @@ def _build_pending_review_outcome_seed(sig_data: dict, *, trade_mode: str) -> di
     }
 
 
+def _reconcile_review_readiness(review_readiness: dict | None, conviction_profile: dict | None) -> dict:
+    review = dict(review_readiness or {})
+    conviction = dict(conviction_profile or {})
+    if not review:
+        return review
+    if review.get('approval_candidate') and (conviction.get('has_blockers') or conviction.get('economic_filter_valid') is False or str(conviction.get('tier') or 'C') == 'C'):
+        review['approval_candidate'] = False
+        review['approval_reason'] = 'demoted_after_decision_flow'
+    return review
+
+
 def _should_relax_governor_suppression(*, sig_meta: dict, perf_governor: dict) -> bool:
     if not bool((perf_governor or {}).get('suppressed')):
         return False

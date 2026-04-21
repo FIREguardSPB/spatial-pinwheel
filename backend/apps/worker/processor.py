@@ -66,6 +66,7 @@ from apps.worker.processor_support import (
     _build_candles_summary,
     _build_pre_persist_review_enrichment,
     _build_pending_review_outcome_seed,
+    _reconcile_review_readiness,
     _build_review_readiness_seed,
     _should_relax_governor_suppression,
     _evaluate_selective_policy_throttle,
@@ -1109,6 +1110,9 @@ class SignalProcessor:
             }
         meta["final_decision"] = final_decision
         meta['cognitive_layer'] = cognitive_payload
+        review_readiness = _reconcile_review_readiness(meta.get('review_readiness'), conviction_profile)
+        if review_readiness:
+            meta['review_readiness'] = review_readiness
         if merge_payload:
             meta["decision_merge"] = merge_payload
         else:
