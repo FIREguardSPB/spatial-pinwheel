@@ -31,6 +31,25 @@ def test_signal_confidence_multiplier_reads_review_readiness():
     assert multiplier == 1.2
 
 
+def test_rotation_memory_bias_penalizes_repeat_reallocations_for_same_instrument():
+    rows = [SimpleNamespace(payload={'result': {'incoming_instrument': 'TQBR:SBER'}}), SimpleNamespace(payload={'result': {'incoming_instrument': 'TQBR:SBER'}})]
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+        def all(self):
+            return rows
+
+    class _DB:
+        def query(self, _model):
+            return _Query()
+
+    allocator = CapitalAllocator(_DB(), SimpleNamespace())
+    bias = allocator._rotation_memory_bias(SimpleNamespace(instrument_id='TQBR:SBER'))
+
+    assert bias > 0
+
+
 def test_hold_current_position_when_incoming_confidence_is_not_strong_enough():
     should_hold = CapitalAllocator._should_hold_current_position(
         current_edge=1.0,

@@ -238,7 +238,7 @@ class PaperExecutionEngine:
                     append_decision_log_best_effort(
                         log_type='capital_reallocation',
                         message=f'Capital reallocation for {signal.instrument_id}',
-                        payload={'signal_id': signal.id, 'trace_id': trace_id, 'candidate': alloc_meta, 'result': realloc},
+                        payload={'signal_id': signal.id, 'trace_id': trace_id, 'instrument_id': signal.instrument_id, 'candidate': alloc_meta, 'result': {'incoming_instrument': signal.instrument_id, **dict(realloc or {})}},
                     )
                     risk_ok, risk_reason = self.risk.check_new_signal(signal)
 
