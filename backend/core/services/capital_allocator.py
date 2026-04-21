@@ -79,6 +79,36 @@ class CapitalAllocator:
                 penalty += 0.08
         return min(0.24, penalty)
 
+    def _rotation_outcome_bias(self, incoming_signal: Signal | None, *, lookback_sec: int = 7200) -> float:
+        instrument_id = str(getattr(incoming_signal, 'instrument_id', None) or '')
+        if not instrument_id:
+            return 0.0
+        cutoff = int(time.time() * 1000) - max(1, int(lookback_sec)) * 1000
+        rows = (
+            self.db.query(DecisionLog)
+            .filter(DecisionLog.ts >= cutoff)
+            .all()
+        )
+        bias = 0.0
+        for row in rows:
+            payload = dict(getattr(row, 'payload', None) or {})
+            if str(payload.get('instrument_id') or payload.get('incoming_instrument') or '') != instrument_id:
+                continue
+            row_type = str(getattr(row, 'type', '') or '')
+            if row_type == 'trade_filled':
+                fill_quality = dict(payload.get('fill_quality') or {})
+                if str(fill_quality.get('status') or '') == 'ok':
+                    bias += 0.05
+                elif str(fill_quality.get('status') or '') == 'anomaly':
+                    bias -= 0.04
+            elif row_type == 'position_closed':
+                net_pnl = float(payload.get('net_pnl') or 0.0)
+                if net_pnl > 0:
+                    bias += 0.06
+                elif net_pnl < 0:
+                    bias -= 0.08
+        return max(-0.18, min(0.18, bias))
+
     @staticmethod
     def _should_hold_current_position(*, current_edge: float, incoming_edge: float, decay_bias: float, pnl_component: float, incoming_confidence_mult: float) -> bool:
         if incoming_confidence_mult >= 1.1:
@@ -209,6 +239,7 @@ class CapitalAllocator:
         incoming_allocator_mult = float(incoming_governor.get('allocator_priority_multiplier') or 1.0) * float(incoming_ml.get('allocator_priority_multiplier') or 1.0)
         incoming_confidence_mult = self._signal_confidence_multiplier(incoming_signal)
         rotation_memory_penalty = self._rotation_memory_bias(incoming_signal)
+        rotation_outcome_bias = self._rotation_outcome_bias(incoming_signal)
         incoming_instrument = str(getattr(incoming_signal, 'instrument_id', None) or '')
         optimizer_overlay = build_portfolio_optimizer_overlay(self.db, self.settings, incoming_signal)
         trim_candidates = list(optimizer_overlay.get('trim_candidates') or []) if isinstance(optimizer_overlay, dict) else []
@@ -232,10 +263,10 @@ class CapitalAllocator:
                 if age_sec < min_age or cooldown_active or partial_count >= max_partials:
                     pos = None
             if pos is not None:
-                allocator_score = max(0.0, (incoming_edge - current_edge) + pressure * 0.35 + decay_bias - rotation_memory_penalty)
+                allocator_score = max(0.0, (incoming_edge - current_edge) + pressure * 0.35 + decay_bias - rotation_memory_penalty + rotation_outcome_bias)
                 return ReallocationCandidate(
                     instrument_id=pos.instrument_id,
-                    qty_ratio=min(max_ratio, max(0.15, float(top.get('qty_ratio') or 0.2) * min(1.2, max(0.9, incoming_confidence_mult)) * max(0.85, 1.0 - rotation_memory_penalty))),
+                    qty_ratio=min(max_ratio, max(0.15, float(top.get('qty_ratio') or 0.2) * min(1.2, max(0.9, incoming_confidence_mult)) * max(0.85, 1.0 - rotation_memory_penalty + rotation_outcome_bias))),
                     current_edge=current_edge,
                     incoming_edge=incoming_edge,
                     score_gap=max(min_gap, incoming_score - int(round(current_edge * 20))),
@@ -268,7 +299,7 @@ class CapitalAllocator:
                 continue
             score_gap = incoming_score - int(round(current_edge * 20))
             edge_improvement = incoming_edge - current_edge
-            allocator_score = edge_improvement + pressure * 0.30 + decay_bias + max(0.0, (current_notional_pct - max_concentration_pct) / max(1.0, max_concentration_pct)) - rotation_memory_penalty
+            allocator_score = edge_improvement + pressure * 0.30 + decay_bias + max(0.0, (current_notional_pct - max_concentration_pct) / max(1.0, max_concentration_pct)) - rotation_memory_penalty + rotation_outcome_bias
             if score_gap < min_gap and allocator_score < min_edge_improvement:
                 continue
             if edge_improvement < min_edge_improvement and current_notional_pct < max_concentration_pct and decay_bias < 0.18:
@@ -297,7 +328,7 @@ class CapitalAllocator:
                 ratio += 0.07
             if pressure >= 0.4:
                 ratio += 0.06
-            ratio *= min(1.2, max(0.9, incoming_confidence_mult)) * max(0.85, 1.0 - rotation_memory_penalty)
+            ratio *= min(1.2, max(0.9, incoming_confidence_mult)) * max(0.85, 1.0 - rotation_memory_penalty + rotation_outcome_bias)
             ratio = min(max_ratio, max(0.15, ratio))
             rationale = (
                 f'incoming edge {incoming_edge:.2f} > position edge {current_edge:.2f}; '

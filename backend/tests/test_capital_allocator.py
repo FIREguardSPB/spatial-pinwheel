@@ -50,6 +50,28 @@ def test_rotation_memory_bias_penalizes_repeat_reallocations_for_same_instrument
     assert bias > 0
 
 
+def test_rotation_outcome_bias_rewards_positive_recent_outcomes():
+    rows = [
+        SimpleNamespace(type='trade_filled', payload={'instrument_id': 'TQBR:SBER', 'fill_quality': {'status': 'ok'}}),
+        SimpleNamespace(type='position_closed', payload={'instrument_id': 'TQBR:SBER', 'net_pnl': 2.5}),
+    ]
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+        def all(self):
+            return rows
+
+    class _DB:
+        def query(self, _model):
+            return _Query()
+
+    allocator = CapitalAllocator(_DB(), SimpleNamespace())
+    bias = allocator._rotation_outcome_bias(SimpleNamespace(instrument_id='TQBR:SBER'))
+
+    assert bias > 0
+
+
 def test_hold_current_position_when_incoming_confidence_is_not_strong_enough():
     should_hold = CapitalAllocator._should_hold_current_position(
         current_edge=1.0,
