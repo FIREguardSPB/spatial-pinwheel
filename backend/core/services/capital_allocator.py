@@ -55,6 +55,12 @@ class CapitalAllocator:
         self.settings = settings
 
     @staticmethod
+    def _signal_confidence_multiplier(signal: Signal | None) -> float:
+        meta = dict((signal.meta or {}) if signal else {})
+        review = dict(meta.get('review_readiness') or {}) if isinstance(meta, dict) else {}
+        return float(review.get('confidence_multiplier') or 1.0)
+
+    @staticmethod
     def _signal_score(signal: Signal | None) -> int:
         meta = dict((signal.meta or {}) if signal else {})
         decision = dict(meta.get('decision') or {})
@@ -172,6 +178,7 @@ class CapitalAllocator:
         incoming_ml = dict(incoming_meta.get('ml_overlay') or {}) if isinstance(incoming_meta, dict) else {}
         incoming_exec_priority = float(incoming_governor.get('execution_priority') or 1.0) * float(incoming_ml.get('execution_priority') or 1.0)
         incoming_allocator_mult = float(incoming_governor.get('allocator_priority_multiplier') or 1.0) * float(incoming_ml.get('allocator_priority_multiplier') or 1.0)
+        incoming_confidence_mult = self._signal_confidence_multiplier(incoming_signal)
         incoming_instrument = str(getattr(incoming_signal, 'instrument_id', None) or '')
         optimizer_overlay = build_portfolio_optimizer_overlay(self.db, self.settings, incoming_signal)
         trim_candidates = list(optimizer_overlay.get('trim_candidates') or []) if isinstance(optimizer_overlay, dict) else []
@@ -198,7 +205,7 @@ class CapitalAllocator:
                 allocator_score = max(0.0, (incoming_edge - current_edge) + pressure * 0.35 + decay_bias)
                 return ReallocationCandidate(
                     instrument_id=pos.instrument_id,
-                    qty_ratio=float(top.get('qty_ratio') or 0.2),
+                    qty_ratio=min(max_ratio, max(0.15, float(top.get('qty_ratio') or 0.2) * min(1.2, max(0.9, incoming_confidence_mult)))),
                     current_edge=current_edge,
                     incoming_edge=incoming_edge,
                     score_gap=max(min_gap, incoming_score - int(round(current_edge * 20))),
@@ -252,6 +259,7 @@ class CapitalAllocator:
                 ratio += 0.07
             if pressure >= 0.4:
                 ratio += 0.06
+            ratio *= min(1.2, max(0.9, incoming_confidence_mult))
             ratio = min(max_ratio, max(0.15, ratio))
             rationale = (
                 f'incoming edge {incoming_edge:.2f} > position edge {current_edge:.2f}; '

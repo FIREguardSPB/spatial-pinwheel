@@ -21,3 +21,11 @@ def test_signal_edge_respects_confidence_multiplier():
     boosted_edge = CapitalAllocator._signal_edge(boosted_signal)
 
     assert boosted_edge > base_edge
+
+
+def test_signal_confidence_multiplier_reads_review_readiness():
+    signal = SimpleNamespace(meta={'review_readiness': {'confidence_multiplier': 1.2}})
+
+    multiplier = CapitalAllocator._signal_confidence_multiplier(signal)
+
+    assert multiplier == 1.2
