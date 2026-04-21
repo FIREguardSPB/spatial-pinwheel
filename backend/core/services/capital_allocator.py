@@ -59,9 +59,11 @@ class CapitalAllocator:
         meta = dict((signal.meta or {}) if signal else {})
         decision = dict(meta.get('decision') or {})
         base_score = int(meta.get('event_adjusted_score') or decision.get('score') or 0)
+        conviction = dict(meta.get('conviction_profile') or {}) if isinstance(meta, dict) else {}
         governor = dict(meta.get('performance_governor') or {}) if isinstance(meta, dict) else {}
         ml_overlay = dict(meta.get('ml_overlay') or {}) if isinstance(meta, dict) else {}
         priority = float(governor.get('execution_priority') or 1.0) * float(ml_overlay.get('execution_priority') or 1.0)
+        priority *= float(conviction.get('allocator_priority_bonus') or 1.0)
         return int(round(base_score + max(-15.0, min(20.0, (priority - 1.0) * 25.0))))
 
     @staticmethod
@@ -75,9 +77,13 @@ class CapitalAllocator:
         event_bias = float(((meta.get('event_regime') or {}).get('score_bias')) or 0.0) / 10.0
         freshness = dict(meta.get('signal_freshness') or {}) if isinstance(meta, dict) else {}
         freshness_penalty = float(freshness.get('penalty_applied') or 0.0) / 100.0
+        conviction = dict(meta.get('conviction_profile') or {}) if isinstance(meta, dict) else {}
+        review = dict(meta.get('review_readiness') or {}) if isinstance(meta, dict) else {}
         governor = dict(meta.get('performance_governor') or {}) if isinstance(meta, dict) else {}
         ml_overlay = dict(meta.get('ml_overlay') or {}) if isinstance(meta, dict) else {}
         alloc_mult = float(governor.get('allocator_priority_multiplier') or 1.0) * float(ml_overlay.get('allocator_priority_multiplier') or 1.0)
+        alloc_mult *= float(conviction.get('allocator_priority_bonus') or 1.0)
+        alloc_mult *= float(review.get('confidence_multiplier') or 1.0)
         exec_priority = float(governor.get('execution_priority') or 1.0) * float(ml_overlay.get('execution_priority') or 1.0)
         base_edge = score * 0.55 + max(-1.0, min(3.0, net_rr)) * 0.25 + min(2.5, vol_ratio) * 0.12 + event_bias * 0.08 - freshness_penalty
         return base_edge * alloc_mult + max(-0.25, min(0.35, (exec_priority - 1.0) * 0.45))
