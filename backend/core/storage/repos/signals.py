@@ -26,14 +26,21 @@ def list_signals(db: Session, limit: int = 50, status: str = None) -> List[Signa
     return rows
 
 
-def get_top_pending_review_candidate(db: Session) -> Optional[Signal]:
+def get_top_pending_review_candidate(db: Session, *, ttl_sec: int = 900) -> Optional[Signal]:
     rows = list_signals(db, limit=50, status='pending_review')
+    now_ms = int(time.time() * 1000)
+    max_age_ms = max(1, int(ttl_sec)) * 1000
     for row in rows:
+        if now_ms - int(getattr(row, 'ts', 0) or 0) > max_age_ms:
+            continue
         meta = dict(row.meta or {})
         review = dict(meta.get('review_readiness') or {})
         if bool(review.get('approval_candidate')):
             return row
-    return rows[0] if rows else None
+    for row in rows:
+        if now_ms - int(getattr(row, 'ts', 0) or 0) <= max_age_ms:
+            return row
+    return None
 
 
 def get_signal(db: Session, signal_id: str) -> Optional[Signal]:
