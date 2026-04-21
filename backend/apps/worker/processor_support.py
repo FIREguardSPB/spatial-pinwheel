@@ -412,6 +412,7 @@ def _run_strategy_timeframe_search(strategy: BaseStrategy, ticker: str, base_his
         _, signal, history, tf, selection_reason = best_candidate
         meta = dict(signal.get('meta') or {})
         promoted_thesis_tf = tf
+        higher_tf_thesis = dict(meta.get('higher_tf_thesis') or {}) if isinstance(meta.get('higher_tf_thesis'), dict) else None
         if tf == '1m' and confirmation_tf != '1m':
             confirmation_history = resample_candles(base_history, confirmation_tf)
             if confirmation_history:
@@ -421,9 +422,23 @@ def _run_strategy_timeframe_search(strategy: BaseStrategy, ticker: str, base_his
                 if aligned and abs(float(slope or 0.0)) >= 0.5:
                     promoted_thesis_tf = confirmation_tf
                     selection_reason = 'context_promoted_thesis'
+                    higher_tf_thesis = build_higher_tf_continuation_thesis(confirmation_history, timeframe=confirmation_tf) or {
+                        'side': side,
+                        'thesis_timeframe': confirmation_tf,
+                        'thesis_type': 'context_alignment',
+                        'structure': f'{trend}_context_alignment',
+                    }
+        elif tf != '1m':
+            higher_tf_thesis = build_higher_tf_continuation_thesis(history, timeframe=tf) or {
+                'side': str(signal.get('side') or 'BUY').upper(),
+                'thesis_timeframe': tf,
+                'thesis_type': 'timeframe_signal',
+                'structure': f'{selection_reason}_timeframe_signal',
+            }
         meta['timeframe_selection_reason'] = selection_reason
         meta['context_timeframe'] = str(regime_stack.get('context_timeframe') or confirmation_tf)
         meta['thesis_timeframe'] = promoted_thesis_tf
+        meta['higher_tf_thesis'] = higher_tf_thesis
         meta['execution_timeframe'] = str(regime_stack.get('execution_timeframe') or '1m')
         meta['higher_timeframe'] = confirmation_tf if tf == '1m' else max_timeframe(tf, confirmation_tf)
         meta['market_regime_profile'] = regime_stack.get('market_regime_profile')

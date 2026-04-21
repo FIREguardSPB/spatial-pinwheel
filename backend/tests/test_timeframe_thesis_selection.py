@@ -69,6 +69,8 @@ class TimeframeThesisSelectionTests(unittest.TestCase):
         self.assertEqual(signal['meta']['analysis_timeframe'], '15m')
         self.assertEqual(meta['selected_timeframe'], '15m')
         self.assertEqual(signal['meta']['timeframe_selection_reason'], 'requested')
+        self.assertIsNotNone(signal['meta'].get('higher_tf_thesis'))
+        self.assertEqual(signal['meta']['higher_tf_thesis']['thesis_timeframe'], '15m')
 
     def test_1m_is_used_as_execution_fallback_when_higher_tfs_have_no_signal(self):
         from apps.worker.processor_support import _run_strategy_timeframe_search
@@ -136,6 +138,8 @@ class TimeframeThesisSelectionTests(unittest.TestCase):
         self.assertEqual(signal['meta']['analysis_timeframe'], '1m')
         self.assertEqual(signal['meta']['timeframe_selection_reason'], 'context_promoted_thesis')
         self.assertEqual(meta['selected_timeframe'], '1m')
+        self.assertIsNotNone(signal['meta'].get('higher_tf_thesis'))
+        self.assertEqual(signal['meta']['higher_tf_thesis']['thesis_timeframe'], '15m')
 
 
 class HigherTimeframeThesisBuilderTests(unittest.TestCase):
