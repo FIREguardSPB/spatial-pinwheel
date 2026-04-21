@@ -205,6 +205,26 @@ def _instrument_fatigue_bias(db: Session, signal: Signal, *, lookback_hours: int
     return -penalty
 
 
+def _diversification_bias(db: Session, signal: Signal) -> int:
+    instrument_id = str(getattr(signal, 'instrument_id', '') or '')
+    if not instrument_id:
+        return 0
+    active_rows = (
+        db.query(Signal)
+        .filter(Signal.status.in_(['pending_review', 'approved', 'executed']))
+        .all()
+    )
+    same_instrument = 0
+    for row in active_rows:
+        if str(getattr(row, 'instrument_id', '') or '') == instrument_id:
+            same_instrument += 1
+    if same_instrument <= 1:
+        return 6
+    if same_instrument == 2:
+        return 0
+    return -6
+
+
 def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
     return (
         _execution_feedback_bonus(db, signal)
@@ -212,6 +232,7 @@ def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
         + _symbol_thesis_learning_bias(db, signal)
         + _regime_aware_learning_bias(db, signal)
         + _instrument_fatigue_bias(db, signal)
+        + _diversification_bias(db, signal)
     )
 
 
