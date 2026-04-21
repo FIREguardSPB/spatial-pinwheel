@@ -15,6 +15,15 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _age_decay_weight(event_ts: int, now_ms: int, lookback_hours: int) -> float:
+    window_ms = int(max(1, lookback_hours)) * 60 * 60 * 1000
+    age_ms = max(0, int(now_ms) - int(event_ts or 0))
+    if age_ms >= window_ms:
+        return 0.0
+    remaining = 1.0 - (age_ms / float(window_ms))
+    return max(0.25, remaining)
+
+
 def _pending_review_priority(signal: Signal) -> tuple[int, int, int, int]:
     meta = dict(getattr(signal, 'meta', None) or {})
     review = dict(meta.get('review_readiness') or {})
@@ -39,6 +48,7 @@ def _execution_feedback_bonus(db: Session, signal: Signal, *, lookback_hours: in
         .all()
     )
     bonus = 0
+    now_ms = int(time.time() * 1000)
     for row in rows:
         payload = dict(getattr(row, 'payload', None) or {})
         seed = dict(payload.get('execution_quality_seed') or {})
@@ -49,9 +59,9 @@ def _execution_feedback_bonus(db: Session, signal: Signal, *, lookback_hours: in
             continue
         status = str(seed.get('fill_quality_status') or '')
         if status == 'ok':
-            bonus += 15
+            bonus += int(round(15 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
         elif status == 'anomaly':
-            bonus -= 10
+            bonus -= int(round(10 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
     return bonus
 
 
@@ -69,6 +79,7 @@ def _outcome_feedback_bonus(db: Session, signal: Signal, *, lookback_hours: int 
         .all()
     )
     bonus = 0
+    now_ms = int(time.time() * 1000)
     for row in rows:
         payload = dict(getattr(row, 'payload', None) or {})
         conviction = dict(payload.get('conviction_profile') or {})
@@ -78,9 +89,9 @@ def _outcome_feedback_bonus(db: Session, signal: Signal, *, lookback_hours: int 
         reason = str(payload.get('reason') or '').upper()
         net_pnl = _safe_float(payload.get('net_pnl'), 0.0)
         if thesis_type == 'continuation' and ('continuation' in notes or reason == 'TP') and net_pnl > 0:
-            bonus += 12
+            bonus += int(round(12 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
         elif reason in {'THESIS_DECAY', 'SL', 'STOP'} or net_pnl < 0:
-            bonus -= 8
+            bonus -= int(round(8 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
     return bonus
 
 
@@ -99,6 +110,7 @@ def _symbol_thesis_learning_bias(db: Session, signal: Signal, *, lookback_hours:
         .all()
     )
     bonus = 0
+    now_ms = int(time.time() * 1000)
     for row in rows:
         payload = dict(getattr(row, 'payload', None) or {})
         seed = dict(payload.get('execution_quality_seed') or {})
@@ -111,16 +123,16 @@ def _symbol_thesis_learning_bias(db: Session, signal: Signal, *, lookback_hours:
             continue
         if str(getattr(row, 'type', '')) == 'trade_filled':
             if str(seed.get('fill_quality_status') or '') == 'ok':
-                bonus += 20
+                bonus += int(round(20 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
             elif str(seed.get('fill_quality_status') or '') == 'anomaly':
-                bonus -= 12
+                bonus -= int(round(12 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
         else:
             net_pnl = _safe_float(payload.get('net_pnl'), 0.0)
             reason = str(payload.get('reason') or '').upper()
             if net_pnl > 0 and reason in {'TP', 'TIME_STOP', 'SESSION_END'}:
-                bonus += 18
+                bonus += int(round(18 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
             elif net_pnl < 0 or reason in {'THESIS_DECAY', 'SL', 'STOP'}:
-                bonus -= 12
+                bonus -= int(round(12 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
     return bonus
 
 
@@ -141,6 +153,7 @@ def _regime_aware_learning_bias(db: Session, signal: Signal, *, lookback_hours: 
         .all()
     )
     bonus = 0
+    now_ms = int(time.time() * 1000)
     for row in rows:
         payload = dict(getattr(row, 'payload', None) or {})
         payload_instrument = str(payload.get('instrument_id') or '')
@@ -154,15 +167,15 @@ def _regime_aware_learning_bias(db: Session, signal: Signal, *, lookback_hours: 
             continue
         if str(getattr(row, 'type', '')) == 'trade_filled':
             if str(seed.get('fill_quality_status') or '') == 'ok':
-                bonus += 10
+                bonus += int(round(10 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
             elif str(seed.get('fill_quality_status') or '') == 'anomaly':
-                bonus -= 6
+                bonus -= int(round(6 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
         else:
             net_pnl = _safe_float(payload.get('net_pnl'), 0.0)
             if net_pnl > 0:
-                bonus += 10
+                bonus += int(round(10 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
             elif net_pnl < 0:
-                bonus -= 8
+                bonus -= int(round(8 * _age_decay_weight(getattr(row, 'ts', 0), now_ms, lookback_hours)))
     return bonus
 
 

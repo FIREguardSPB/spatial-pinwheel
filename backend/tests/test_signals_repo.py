@@ -4,6 +4,14 @@ from core.storage.repos import signals as signals_repo
 from core.storage.repos.signals import _pending_review_priority
 
 
+def test_age_decay_weight_prefers_fresher_feedback():
+    fresh = signals_repo._age_decay_weight(1_990_000, 2_000_000, 24)
+    stale = signals_repo._age_decay_weight(1_000_000, 2_000_000, 24)
+
+    assert fresh > stale
+    assert stale >= 0.25
+
+
 def test_pending_review_priority_prefers_approval_candidates_then_queue_priority():
     strong = SimpleNamespace(
         meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99}},
