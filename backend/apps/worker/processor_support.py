@@ -123,15 +123,20 @@ def _build_pre_persist_candidate_payload(*, ticker: str, sig_data: dict, strateg
 def _evaluate_selective_policy_throttle(*, policy_state: Any, final_decision: str, score: int, threshold: int, sig_data: dict, perf_governor: dict, freshness_meta: dict) -> tuple[bool, str]:
     if not bool(getattr(policy_state, 'selective_throttle', False)):
         return False, ''
-    if str(final_decision or '').upper() != 'TAKE':
-        return True, 'selective throttle keeps only TAKE candidates during frozen mode'
-    if bool((freshness_meta or {}).get('blocked')):
-        return True, 'selective throttle rejects stale candidates during frozen mode'
     meta = dict(((sig_data or {}).get('meta') or {}))
     promotion_meta = dict(meta.get('high_conviction_promotion') or {})
     conviction_meta = dict(meta.get('conviction_profile') or {})
     cooldown_meta = dict(meta.get('cooldown_context') or {})
+    higher_tf_thesis = dict(meta.get('higher_tf_thesis') or {}) if isinstance(meta.get('higher_tf_thesis'), dict) else {}
+    higher_tf_led = str(meta.get('thesis_timeframe') or higher_tf_thesis.get('thesis_timeframe') or '1m') in {'5m', '15m', '30m', '1h'}
     promoted = bool(promotion_meta.get('promoted'))
+    rr_value = float(sig_data.get('r') or 0.0)
+    if bool((freshness_meta or {}).get('blocked')):
+        return True, 'selective throttle rejects stale candidates during frozen mode'
+    if str(final_decision or '').upper() != 'TAKE':
+        if higher_tf_led and not bool((perf_governor or {}).get('suppressed')) and int(score or 0) >= max(int(threshold or 0) - 1, 0) and rr_value >= 1.6:
+            return False, ''
+        return True, 'selective throttle keeps only TAKE candidates during frozen mode'
     min_score = int(threshold or 0)
     if not promoted:
         buffer_override = conviction_meta.get('frozen_score_buffer_override')
@@ -149,7 +154,6 @@ def _evaluate_selective_policy_throttle(*, policy_state: Any, final_decision: st
         min_rr = min(min_rr, float(rr_override))
     if bool(cooldown_meta.get('active')):
         min_rr = max(min_rr, 1.8)
-    rr_value = float(sig_data.get('r') or 0.0)
     if rr_value < min_rr:
         return True, f'selective throttle requires RR >= {min_rr:.2f}'
     if bool(getattr(policy_state, 'selective_require_governor_pass', False)) and bool((perf_governor or {}).get('suppressed')):
