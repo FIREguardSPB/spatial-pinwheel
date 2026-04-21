@@ -29,9 +29,10 @@ def _pending_review_priority(signal: Signal) -> tuple[int, int, int, int]:
     review = dict(meta.get('review_readiness') or {})
     approval = 1 if bool(review.get('approval_candidate')) else 0
     queue_priority = int(review.get('queue_priority') or 0)
+    confidence_bias = int(review.get('confidence_bias') or 0)
     created_ts = int(getattr(signal, 'created_ts', 0) or 0)
     ts = int(getattr(signal, 'ts', 0) or 0)
-    return (approval, queue_priority, created_ts, ts)
+    return (approval, queue_priority, confidence_bias, created_ts, ts)
 
 
 def _execution_feedback_bonus(db: Session, signal: Signal, *, lookback_hours: int = 24) -> int:

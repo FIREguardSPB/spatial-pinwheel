@@ -34,6 +34,23 @@ def test_pending_review_priority_prefers_approval_candidates_then_queue_priority
     assert ranked == [strong, medium, weak]
 
 
+def test_pending_review_priority_uses_confidence_bias_as_tiebreaker():
+    lower = SimpleNamespace(
+        meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99, 'confidence_bias': 0}},
+        created_ts=200,
+        ts=200,
+    )
+    higher = SimpleNamespace(
+        meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99, 'confidence_bias': 20}},
+        created_ts=100,
+        ts=100,
+    )
+
+    ranked = sorted([lower, higher], key=_pending_review_priority, reverse=True)
+
+    assert ranked == [higher, lower]
+
+
 def test_get_top_pending_review_candidate_prefers_approval_candidate(monkeypatch):
     now_ms = 2_000_000
     weak = SimpleNamespace(meta={'review_readiness': {'approval_candidate': False, 'queue_priority': 120}}, created_ts=400, ts=400)
