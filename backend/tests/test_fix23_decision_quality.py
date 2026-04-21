@@ -59,22 +59,34 @@ def _snapshot_with_far_level() -> MarketSnapshot:
 
 
 def test_positive_but_subunit_net_rr_is_not_labeled_negative():
-    score, reasons, breakdown = score_costs(100.0, 99.0, 100.2, fees_bps=3, slippage_bps=5, max_score=15)
-    assert score == 0
+    score, reasons, breakdown = score_costs(100.0, 99.0, 101.1, fees_bps=3, slippage_bps=5, max_score=15)
+    assert score > 0
     assert breakdown['net_rr'] is not None and 0 < breakdown['net_rr'] < 1
-    assert any('Sub-1 after costs' in r.msg for r in reasons)
+    assert any('Borderline after costs' in r.msg for r in reasons)
     assert not any('Non-positive after costs' in r.msg for r in reasons)
 
 
-def test_take_is_capped_to_skip_when_net_rr_below_one():
+def test_take_survives_when_net_rr_is_borderline_but_positive():
     engine = DecisionEngine(_settings())
     snapshot = _snapshot_with_far_level()
-    sig = MockSignal(entry=100.0, sl=99.0, tp=100.2, r=2.0)
+    sig = MockSignal(entry=100.0, sl=99.0, tp=101.1, r=2.0)
     with patch('apps.worker.decision_engine.rules.check_session', return_value=None):
         result = engine.evaluate(sig, snapshot)
     assert result.metrics['net_rr'] is not None and 0 < result.metrics['net_rr'] < 1
+    assert result.metrics['net_rr'] >= 0.75
+    assert result.decision == Decision.TAKE
+    assert result.metrics.get('decision_adjustment') is None
+
+
+def test_take_is_capped_to_skip_when_net_rr_is_too_thin_even_if_positive():
+    engine = DecisionEngine(_settings())
+    snapshot = _snapshot_with_far_level()
+    sig = MockSignal(entry=100.0, sl=99.0, tp=100.9, r=2.0)
+    with patch('apps.worker.decision_engine.rules.check_session', return_value=None):
+        result = engine.evaluate(sig, snapshot)
+    assert result.metrics['net_rr'] is not None and 0 < result.metrics['net_rr'] < 0.75
     assert result.decision != Decision.TAKE
-    assert result.metrics.get('decision_adjustment') == 'capped_take_subunit_net_rr'
+    assert result.metrics.get('decision_adjustment') == 'capped_take_low_net_rr'
 
 
 def test_non_positive_net_rr_blocks_execution():

@@ -14,6 +14,7 @@ from apps.worker.decision_engine.types import (
 )
 from apps.worker.decision_engine import rules, indicators
 from core.risk.economic import EconomicFilter, EconomicFilterConfig
+from core.services.sector_filters import apply_sector_overrides
 
 try:
     from core.storage.models import Settings
@@ -111,7 +112,11 @@ class DecisionEngine:
                                   _get_w(getattr(self.settings, 'decision_threshold', None), 70), reasons, metrics)
 
         # ── 2. Data sufficiency ───────────────────────────────────────────────
-        if len(snapshot.candles) < 50:
+        signal_meta = dict(getattr(signal, 'meta', {}) or {}) if hasattr(signal, 'meta') else {}
+        thesis_timeframe = str(signal_meta.get('thesis_timeframe') or '1m')
+        min_candles = 40 if thesis_timeframe in {'5m', '15m', '30m', '1h'} else 50
+        metrics['min_candles_required'] = min_candles
+        if len(snapshot.candles) < min_candles:
             reasons.append(Reason(
                 code=ReasonCode.NO_MARKET_DATA, severity=Severity.BLOCK,
                 msg=f"Not enough candles ({len(snapshot.candles)})",
@@ -143,8 +148,12 @@ class DecisionEngine:
         lows    = [indicators.to_float(c["low"])    for c in snapshot.candles]
         volumes = [float(c.get("volume", 0))         for c in snapshot.candles]
 
-        ema50      = indicators.calc_ema(closes, 50)
-        ema50_prev = indicators.calc_ema(closes[:-1], 50)
+        ema_period = 50
+        if thesis_timeframe in {'5m', '15m', '30m', '1h'} and len(closes) >= 40:
+            ema_period = 34
+        metrics['ema_period_used'] = ema_period
+        ema50      = indicators.calc_ema(closes, ema_period)
+        ema50_prev = indicators.calc_ema(closes[:-1], min(ema_period, max(1, len(closes) - 1)))
         rsi14      = indicators.calc_rsi(closes, 14)
         atr14      = indicators.calc_atr(highs, lows, closes, 14)
         macd_tuple = indicators.calc_macd(closes)
@@ -199,8 +208,10 @@ class DecisionEngine:
 
         profile = _strategy_profile(signal)
         adaptive_plan = _adaptive_plan(signal)
+        sector_filters = apply_sector_overrides(self.settings, getattr(signal, 'instrument_id', None))
         if adaptive_plan:
             metrics['adaptive_plan'] = adaptive_plan
+        metrics['sector_filters'] = sector_filters
         metrics["strategy_profile"] = profile
 
         w_regime  = _weighted_component(getattr(self.settings, 'w_regime', None), 20, profile.get("regime", 1.0))
@@ -219,8 +230,8 @@ class DecisionEngine:
         # B) Volatility (ATR sanity soft)
         s, r = rules.score_volatility_soft(
             float(signal.entry), float(signal.sl), atr14,
-            _setting_number(self.settings, 'atr_stop_soft_min', 0.6),
-            _setting_number(self.settings, 'atr_stop_soft_max', 2.5),
+            float((sector_filters or {}).get('atr_stop_soft_min') or _setting_number(self.settings, 'atr_stop_soft_min', 0.6)),
+            float((sector_filters or {}).get('atr_stop_soft_max') or _setting_number(self.settings, 'atr_stop_soft_max', 2.5)),
             max_score=w_vol,
         )
         total_score += s; reasons.extend(r)
@@ -303,7 +314,8 @@ class DecisionEngine:
 
         # F) P5-02: Volume (replaces Liquidity stub)
         if vol_ratio is not None:
-            min_ratio = 0.5
+            volume_mult = float((sector_filters or {}).get('volume_filter_multiplier') or 1.0)
+            min_ratio = max(0.2, 0.5 * volume_mult)
             anomalous_ratio = _setting_number(self.settings, 'volume_anomalous_ratio', 8.0)
             extreme_ratio = _setting_number(self.settings, 'volume_extreme_ratio', 20.0)
             metrics["volume_warn_threshold"] = anomalous_ratio
@@ -360,13 +372,13 @@ class DecisionEngine:
             ))
             metrics["decision_adjustment"] = "blocked_non_positive_net_rr"
             decision = Decision.REJECT
-        elif net_rr is not None and net_rr < 1.0 and decision == Decision.TAKE:
+        elif net_rr is not None and net_rr < 0.75 and decision == Decision.TAKE:
             reasons.append(Reason(
                 code=ReasonCode.COSTS_TOO_HIGH,
                 severity=Severity.WARN,
                 msg=f"Net RR {net_rr:.2f} caps decision to SKIP",
             ))
-            metrics["decision_adjustment"] = "capped_take_subunit_net_rr"
+            metrics["decision_adjustment"] = "capped_take_low_net_rr"
             decision = Decision.SKIP
 
         return self._finalize(decision, score_pct, score_raw, score_max,

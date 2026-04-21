@@ -83,7 +83,10 @@ def test_economic_filter_blocks_micro_levels_even_when_price_is_allowed():
 
 
 def test_decision_engine_rejects_signal_on_economic_filter():
-    engine = DecisionEngine(_settings())
+    settings = _settings()
+    settings.atr_stop_hard_min = 0.0
+    settings.atr_stop_soft_min = 0.0
+    engine = DecisionEngine(settings)
     sig = MockSignal(entry=12.0, sl=11.982, tp=12.036, size=200, r=2.0)
     with patch('apps.worker.decision_engine.rules.check_session', return_value=None):
         result = engine.evaluate(sig, _snapshot())
@@ -142,6 +145,8 @@ def test_prompt_includes_economic_context_and_warnings():
 
 def test_decision_engine_uses_runtime_economic_floor_settings_without_falling_back_to_code_defaults():
     settings = _settings()
+    settings.atr_stop_hard_min = 0.0
+    settings.atr_stop_soft_min = 0.0
     settings.min_sl_distance_pct = 0.001
     settings.min_trade_value_rub = 10.0
     settings.min_profit_after_costs_multiplier = 1.0
