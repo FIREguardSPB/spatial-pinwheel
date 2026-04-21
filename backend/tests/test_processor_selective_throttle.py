@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from apps.worker.processor_support import _build_conviction_profile, _build_pre_persist_review_enrichment, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip, _should_relax_governor_suppression
+from apps.worker.processor_support import _build_conviction_profile, _build_pending_review_outcome_seed, _build_pre_persist_review_enrichment, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip, _should_relax_governor_suppression
 
 
 class ProcessorSelectiveThrottleTests(unittest.TestCase):
@@ -69,6 +69,46 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         self.assertEqual(enrichment['conviction_profile']['tier'], 'B')
         self.assertTrue(enrichment['conviction_profile']['tradable'])
         self.assertEqual(enrichment['review_readiness']['thesis_timeframe'], '15m')
+
+    def test_pending_review_outcome_seed_marks_auto_paper_higher_tf_candidate(self):
+        seed = _build_pending_review_outcome_seed({
+            'side': 'BUY',
+            'r': 2.4,
+            'meta': {
+                'strategy_name': 'breakout',
+                'thesis_timeframe': '15m',
+                'timeframe_selection_reason': 'requested',
+                'execution_timeframe': '15m',
+                'higher_tf_thesis': {
+                    'thesis_timeframe': '15m',
+                    'thesis_type': 'timeframe_signal',
+                    'structure': 'requested_timeframe_signal',
+                    'side': 'BUY',
+                },
+            },
+        }, trade_mode='auto_paper')
+        self.assertTrue(seed['approval_candidate'])
+        self.assertEqual(seed['approval_reason'], 'higher_tf_strong_pending_candidate')
+
+    def test_pending_review_outcome_seed_keeps_review_only_when_not_strong_enough(self):
+        seed = _build_pending_review_outcome_seed({
+            'side': 'BUY',
+            'r': 1.4,
+            'meta': {
+                'strategy_name': 'breakout',
+                'thesis_timeframe': '5m',
+                'timeframe_selection_reason': 'fallback',
+                'execution_timeframe': '1m',
+                'higher_tf_thesis': {
+                    'thesis_timeframe': '5m',
+                    'thesis_type': 'timeframe_signal',
+                    'structure': 'fallback_timeframe_signal',
+                    'side': 'BUY',
+                },
+            },
+        }, trade_mode='auto_paper')
+        self.assertFalse(seed['approval_candidate'])
+        self.assertEqual(seed['approval_reason'], 'review_only_pending_candidate')
 
     def test_blocks_non_take_candidates_in_frozen_mode(self):
         blocked, reason = _evaluate_selective_policy_throttle(

@@ -65,6 +65,7 @@ from apps.worker.processor_support import (
     _apply_geometry_pass,
     _build_candles_summary,
     _build_pre_persist_review_enrichment,
+    _build_pending_review_outcome_seed,
     _build_review_readiness_seed,
     _should_relax_governor_suppression,
     _evaluate_selective_policy_throttle,
@@ -439,6 +440,9 @@ class SignalProcessor:
         trace_id = context["trace_id"]
         meta = dict(sig_data.get('meta') or {})
         meta.setdefault('review_readiness', _build_review_readiness_seed(sig_data))
+        if str(sig_data.get('status') or '') == 'pending_review':
+            trade_mode = (getattr(context.get('settings'), 'trade_mode', None) or 'review')
+            meta['review_readiness'] = _build_pending_review_outcome_seed(sig_data, trade_mode=trade_mode)
         sig_data['meta'] = meta
         # 5. Persist signal
         try:
