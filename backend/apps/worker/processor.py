@@ -66,6 +66,7 @@ from apps.worker.processor_support import (
     _build_candles_summary,
     _build_pre_persist_review_enrichment,
     _build_review_readiness_seed,
+    _should_relax_governor_suppression,
     _evaluate_selective_policy_throttle,
     _promote_high_conviction_skip,
     _candidate_timeframes,
@@ -679,6 +680,11 @@ class SignalProcessor:
         sig_meta = dict(sig_data.get('meta') or {})
         sig_meta['ml_overlay'] = ml_overlay.to_meta()
         sig_data['meta'] = sig_meta
+        perf_governor = dict(perf_governor or {})
+        if _should_relax_governor_suppression(sig_meta=sig_meta, perf_governor=perf_governor):
+            perf_governor['suppressed'] = False
+            perf_governor['relaxed_for_higher_tf'] = True
+            perf_governor['relaxation_reason'] = 'higher_tf_tradeable_candidate'
         ml_risk_mult = float(ml_overlay.risk_multiplier or 1.0)
         risk_sizing_meta = dict(sig_meta.get('risk_sizing') or {})
         risk_sizing_meta['ml_risk_multiplier'] = round(ml_risk_mult, 4)

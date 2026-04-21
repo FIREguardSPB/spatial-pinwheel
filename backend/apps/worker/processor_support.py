@@ -162,6 +162,24 @@ def _build_pre_persist_review_enrichment(sig_data: dict, *, block_reason: str) -
     }
 
 
+def _should_relax_governor_suppression(*, sig_meta: dict, perf_governor: dict) -> bool:
+    if not bool((perf_governor or {}).get('suppressed')):
+        return False
+    thesis = dict((sig_meta or {}).get('higher_tf_thesis') or {}) if isinstance((sig_meta or {}).get('higher_tf_thesis'), dict) else {}
+    thesis_tf = str((sig_meta or {}).get('thesis_timeframe') or thesis.get('thesis_timeframe') or '1m')
+    conviction = dict((sig_meta or {}).get('conviction_profile') or {})
+    if thesis_tf not in {'5m', '15m', '30m', '1h'}:
+        return False
+    if str(conviction.get('tier') or 'C') not in {'B', 'A', 'A+'}:
+        return False
+    score_gap = conviction.get('score_gap')
+    try:
+        score_gap_value = int(score_gap)
+    except Exception:
+        return False
+    return score_gap_value >= -10
+
+
 def _evaluate_selective_policy_throttle(*, policy_state: Any, final_decision: str, score: int, threshold: int, sig_data: dict, perf_governor: dict, freshness_meta: dict) -> tuple[bool, str]:
     if not bool(getattr(policy_state, 'selective_throttle', False)):
         return False, ''

@@ -1,10 +1,32 @@
 import unittest
 from types import SimpleNamespace
 
-from apps.worker.processor_support import _build_conviction_profile, _build_pre_persist_review_enrichment, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip
+from apps.worker.processor_support import _build_conviction_profile, _build_pre_persist_review_enrichment, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip, _should_relax_governor_suppression
 
 
 class ProcessorSelectiveThrottleTests(unittest.TestCase):
+    def test_relaxes_governor_suppression_for_tradeable_higher_tf_candidate(self):
+        relaxed = _should_relax_governor_suppression(
+            sig_meta={
+                'thesis_timeframe': '15m',
+                'higher_tf_thesis': {'thesis_timeframe': '15m', 'thesis_type': 'timeframe_signal'},
+                'conviction_profile': {'tier': 'B', 'score_gap': -9},
+            },
+            perf_governor={'suppressed': True},
+        )
+        self.assertTrue(relaxed)
+
+    def test_does_not_relax_governor_for_weak_candidate(self):
+        relaxed = _should_relax_governor_suppression(
+            sig_meta={
+                'thesis_timeframe': '15m',
+                'higher_tf_thesis': {'thesis_timeframe': '15m', 'thesis_type': 'timeframe_signal'},
+                'conviction_profile': {'tier': 'C', 'score_gap': -19},
+            },
+            perf_governor={'suppressed': True},
+        )
+        self.assertFalse(relaxed)
+
     def test_review_readiness_seed_preserves_higher_tf_context(self):
         seed = _build_review_readiness_seed({
             'side': 'SELL',
