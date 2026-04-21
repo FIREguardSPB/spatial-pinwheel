@@ -270,6 +270,7 @@ def _build_conviction_profile(*, final_decision: str, score: int, threshold: int
     volume_anomalous = 'VOLUME_ANOMALOUS' in reason_codes
     higher_tf_thesis = dict(signal_meta.get('higher_tf_thesis') or {}) if isinstance(signal_meta.get('higher_tf_thesis'), dict) else {}
     higher_tf_led = str(signal_meta.get('thesis_timeframe') or higher_tf_thesis.get('thesis_timeframe') or '1m') in {'5m', '15m', '30m', '1h'}
+    higher_tf_selection_reason = str(signal_meta.get('timeframe_selection_reason') or '')
 
     tier = 'C'
     frozen_score_buffer_override = None
@@ -289,6 +290,10 @@ def _build_conviction_profile(*, final_decision: str, score: int, threshold: int
             frozen_score_buffer_override = 0
             frozen_rr_override = 1.5
         elif higher_tf_led and score_gap >= -10 and net_rr >= 0.8 and (commission_ratio is None or commission_ratio <= 1.05):
+            tier = 'B'
+            frozen_score_buffer_override = 0
+            frozen_rr_override = 1.5
+        elif higher_tf_selection_reason in {'requested', 'confirmation'} and higher_tf_led and score_gap >= -30 and net_rr >= 1.2 and (commission_ratio is None or commission_ratio <= 0.75):
             tier = 'B'
             frozen_score_buffer_override = 0
             frozen_rr_override = 1.5
