@@ -29,3 +29,27 @@ def test_signal_confidence_multiplier_reads_review_readiness():
     multiplier = CapitalAllocator._signal_confidence_multiplier(signal)
 
     assert multiplier == 1.2
+
+
+def test_hold_current_position_when_incoming_confidence_is_not_strong_enough():
+    should_hold = CapitalAllocator._should_hold_current_position(
+        current_edge=1.0,
+        incoming_edge=1.05,
+        decay_bias=0.05,
+        pnl_component=1.2,
+        incoming_confidence_mult=1.0,
+    )
+
+    assert should_hold is True
+
+
+def test_do_not_hold_when_incoming_confidence_is_high():
+    should_hold = CapitalAllocator._should_hold_current_position(
+        current_edge=1.0,
+        incoming_edge=1.05,
+        decay_bias=0.05,
+        pnl_component=1.2,
+        incoming_confidence_mult=1.15,
+    )
+
+    assert should_hold is False

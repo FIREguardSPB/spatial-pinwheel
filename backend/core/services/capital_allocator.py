@@ -61,6 +61,16 @@ class CapitalAllocator:
         return float(review.get('confidence_multiplier') or 1.0)
 
     @staticmethod
+    def _should_hold_current_position(*, current_edge: float, incoming_edge: float, decay_bias: float, pnl_component: float, incoming_confidence_mult: float) -> bool:
+        if incoming_confidence_mult >= 1.1:
+            return False
+        if pnl_component <= 0:
+            return False
+        if decay_bias >= 0.15:
+            return False
+        return current_edge >= incoming_edge * 0.9
+
+    @staticmethod
     def _signal_score(signal: Signal | None) -> int:
         meta = dict((signal.meta or {}) if signal else {})
         decision = dict(meta.get('decision') or {})
@@ -242,6 +252,14 @@ class CapitalAllocator:
             if score_gap < min_gap and allocator_score < min_edge_improvement:
                 continue
             if edge_improvement < min_edge_improvement and current_notional_pct < max_concentration_pct and decay_bias < 0.18:
+                continue
+            if self._should_hold_current_position(
+                current_edge=current_edge,
+                incoming_edge=incoming_edge,
+                decay_bias=decay_bias,
+                pnl_component=pnl_component,
+                incoming_confidence_mult=incoming_confidence_mult,
+            ):
                 continue
             if current_notional_pct < max_concentration_pct * 0.55 and pressure < 0.45 and decay_bias < 0.20:
                 # Avoid churn on already modest positions unless portfolio is really tight.
