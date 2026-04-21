@@ -302,6 +302,8 @@ def _build_conviction_profile(*, final_decision: str, score: int, threshold: int
     higher_tf_thesis = dict(signal_meta.get('higher_tf_thesis') or {}) if isinstance(signal_meta.get('higher_tf_thesis'), dict) else {}
     higher_tf_led = str(signal_meta.get('thesis_timeframe') or higher_tf_thesis.get('thesis_timeframe') or '1m') in {'5m', '15m', '30m', '1h'}
     higher_tf_selection_reason = str(signal_meta.get('timeframe_selection_reason') or '')
+    review_readiness = dict(signal_meta.get('review_readiness') or {}) if isinstance(signal_meta.get('review_readiness'), dict) else {}
+    confidence_bias = int(review_readiness.get('confidence_bias') or 0)
 
     tier = 'C'
     frozen_score_buffer_override = None
@@ -328,6 +330,10 @@ def _build_conviction_profile(*, final_decision: str, score: int, threshold: int
             tier = 'B'
             frozen_score_buffer_override = 0
             frozen_rr_override = 1.5
+        elif confidence_bias >= 15 and higher_tf_selection_reason in {'requested', 'confirmation'} and higher_tf_led and score_gap >= -16 and net_rr >= 1.0 and (commission_ratio is None or commission_ratio <= 0.8):
+            tier = 'B'
+            frozen_score_buffer_override = 0
+            frozen_rr_override = 1.45
 
     tradable = tier in {'A+', 'A', 'B'}
     decision_upper = str(final_decision or '').upper()
@@ -349,6 +355,7 @@ def _build_conviction_profile(*, final_decision: str, score: int, threshold: int
         'frozen_rr_override': frozen_rr_override,
         'allocator_priority_bonus': 1.15 if tier == 'A+' else (1.08 if tier == 'A' else 1.0),
         'risk_tier_bias': 1.05 if tier == 'A+' else (1.02 if tier == 'A' else (0.97 if tier == 'C' else 1.0)),
+        'confidence_bias': confidence_bias,
     }
 
 

@@ -403,6 +403,33 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         self.assertEqual(profile['tier'], 'B')
         self.assertTrue(profile['rescue_eligible'])
 
+    def test_confidence_bias_can_restore_tradeable_b_tier_for_requested_higher_tf(self):
+        profile = _build_conviction_profile(
+            final_decision='REJECT',
+            score=66,
+            threshold=80,
+            evaluation=SimpleNamespace(
+                reasons=[],
+                metrics={'economic_filter_valid': True, 'net_rr': 1.05, 'commission_dominance_ratio': 0.55},
+            ),
+            perf_governor={'suppressed': False},
+            freshness_meta={'blocked': False},
+            signal_meta={
+                'thesis_timeframe': '15m',
+                'timeframe_selection_reason': 'requested',
+                'review_readiness': {'confidence_bias': 20},
+                'higher_tf_thesis': {
+                    'thesis_timeframe': '15m',
+                    'thesis_type': 'continuation',
+                    'structure': 'near_high_break_continuation',
+                    'side': 'BUY',
+                },
+            },
+        )
+        self.assertEqual(profile['tier'], 'B')
+        self.assertEqual(profile['confidence_bias'], 20)
+        self.assertTrue(profile['rescue_eligible'])
+
     def test_conviction_profile_rejects_non_tradeable_cost_structure(self):
         profile = _build_conviction_profile(
             final_decision='SKIP',
