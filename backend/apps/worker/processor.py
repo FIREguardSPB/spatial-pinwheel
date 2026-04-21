@@ -68,6 +68,7 @@ from apps.worker.processor_support import (
     _build_pending_review_outcome_seed,
     _reconcile_review_readiness,
     _build_review_readiness_seed,
+    _should_queue_capacity_blocked_candidate,
     _should_relax_governor_suppression,
     _evaluate_selective_policy_throttle,
     _promote_high_conviction_skip,
@@ -310,7 +311,7 @@ class SignalProcessor:
                 }
                 sig_meta.update(_build_pre_persist_review_enrichment(sig_data, block_reason=risk_reason))
                 sig_data['meta'] = sig_meta
-                sig_data['status'] = 'rejected'
+                sig_data['status'] = 'pending_review' if _should_queue_capacity_blocked_candidate(sig_data, block_reason=risk_reason) else 'rejected'
                 sig_data['reason'] = risk_reason
                 context['sig_data'] = sig_data
                 context['risk'] = risk
@@ -411,7 +412,7 @@ class SignalProcessor:
             }
             sig_meta.update(_build_pre_persist_review_enrichment(sig_data, block_reason=risk_reason))
             sig_data['meta'] = sig_meta
-            sig_data['status'] = 'rejected'
+            sig_data['status'] = 'pending_review' if _should_queue_capacity_blocked_candidate(sig_data, block_reason=risk_reason) else 'rejected'
             sig_data['reason'] = risk_reason
             context['sig_data'] = sig_data
             context['risk'] = risk

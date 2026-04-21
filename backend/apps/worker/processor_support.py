@@ -162,6 +162,17 @@ def _build_pre_persist_review_enrichment(sig_data: dict, *, block_reason: str) -
     }
 
 
+def _should_queue_capacity_blocked_candidate(sig_data: dict, *, block_reason: str) -> bool:
+    if not str(block_reason or '').startswith('Max positions reached'):
+        return False
+    meta = dict((sig_data or {}).get('meta') or {})
+    thesis = dict(meta.get('higher_tf_thesis') or {}) if isinstance(meta.get('higher_tf_thesis'), dict) else {}
+    thesis_tf = str(meta.get('thesis_timeframe') or thesis.get('thesis_timeframe') or '1m')
+    selection_reason = str(meta.get('timeframe_selection_reason') or '')
+    rr_value = float((sig_data or {}).get('r') or 0.0)
+    return thesis_tf in {'5m', '15m'} and selection_reason in {'requested', 'confirmation'} and rr_value >= 2.0
+
+
 def _build_pending_review_outcome_seed(sig_data: dict, *, trade_mode: str) -> dict:
     review = _build_review_readiness_seed(sig_data)
     initial_rr = float(review.get('initial_rr') or 0.0)
