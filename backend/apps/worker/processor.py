@@ -23,6 +23,7 @@ from apps.worker.ai.historical import HistoricalContextAnalyzer
 from apps.worker.ai.fast_path import evaluate_ai_fast_path
 from core.config import get_token, settings as runtime_config
 from core.events.bus import bus
+from core.execution.controls import prefers_paper_execution
 from core.execution.paper import PaperExecutionEngine
 from core.metrics import record_signal, record_risk_block
 from core.risk.manager import RiskManager
@@ -31,16 +32,20 @@ from core.services.event_regime import analyze_event_regime, persist_event_regim
 from core.services.geometry_optimizer import optimize_signal_geometry, should_retry_geometry
 from core.services.timeframe_engine import align_signal_to_execution, detect_trend, normalize_timeframe, resample_candles, timeframe_rank
 from core.services.signal_freshness import apply_signal_freshness
+from core.services.cognitive_layer import build_cognitive_layer_payload
 from core.services.degrade_policy import evaluate_degrade_policy
 from core.services.performance_governor import evaluate_signal_governor
 from core.ml.runtime import evaluate_ml_overlay
 from core.services.signal_execution_uow import SignalExecutionUnitOfWork
 from core.services.portfolio_optimizer import build_portfolio_optimizer_overlay
+from core.services.sector_filters import apply_sector_overrides, get_instrument_sector_payload
+from core.sentiment.repo import build_prompt_sentiment_context
 from core.storage.repos import settings as settings_repo
 from core.storage.repos import signals as signal_repo
 from core.storage.repos.ai_repo import save_ai_decision
 from core.storage.decision_log_utils import append_decision_log_best_effort
 from core.strategy.base import BaseStrategy
+from apps.worker.correlation_map import build_correlation_candles_map
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +58,14 @@ from apps.worker.processor_support import (
     _apply_event_regime,
     _json_safe,
     _append_decision_log,
+    _build_conviction_profile,
     _build_merge_payload,
+    _build_pre_persist_candidate_payload,
     _build_signal_pipeline_payload,
     _apply_geometry_pass,
     _build_candles_summary,
+    _evaluate_selective_policy_throttle,
+    _promote_high_conviction_skip,
     _candidate_timeframes,
     _run_strategy_timeframe_search,
     _attach_execution_geometry,
@@ -122,6 +131,9 @@ class SignalProcessor:
 
         trace_id = f"trace_{uuid.uuid4().hex[:12]}"
         sig_meta = dict(sig_data.get("meta") or {})
+        sector_payload = get_instrument_sector_payload(ticker)
+        sig_meta['sector'] = sector_payload.get('sector_id')
+        sig_meta['sector_filters'] = apply_sector_overrides(settings, ticker)
         if adaptive_plan:
             sig_meta["adaptive_plan"] = adaptive_plan
             if adaptive_plan.get("strategy_name"):
@@ -173,7 +185,7 @@ class SignalProcessor:
         mem_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         logger.debug("%s: risk_and_sizing memory before: %d KB", ticker, mem_before)
         policy_state = evaluate_degrade_policy(db, settings)
-        if policy_state.state == 'frozen' and policy_state.block_new_entries:
+        if policy_state.state == 'frozen' and policy_state.block_new_entries and not bool(getattr(policy_state, 'selective_throttle', False)):
             risk_reason = f"Automatic freeze policy blocked new entries: {'; '.join(policy_state.reasons)}"
             logger.warning('%s: %s', ticker, risk_reason)
             record_risk_block('auto_freeze_policy')
@@ -183,29 +195,121 @@ class SignalProcessor:
                 message=f"{ticker} frozen by automatic degrade/freeze policy",
                 payload={'instrument_id': ticker, 'trace_id': trace_id, 'policy': policy_state.to_meta(), 'signal': _json_safe(sig_data)},
             )
-            return None
+            sig_meta = dict(sig_data.get('meta') or {})
+            sig_meta['auto_policy'] = policy_state.to_meta()
+            sig_meta['pre_persist_block'] = {
+                'code': 'auto_freeze_policy',
+                'reason': risk_reason,
+                'stage': 'policy_blocked',
+                'ts': int(time.time() * 1000),
+            }
+            sig_meta['candidate_snapshot'] = _build_pre_persist_candidate_payload(
+                ticker=ticker,
+                sig_data=sig_data,
+                strategy_name=(adaptive_plan or {}).get('strategy_name'),
+                stage='policy_blocked',
+                block_code='auto_freeze_policy',
+                block_reason=risk_reason,
+            )
+            sig_meta['cognitive_layer'] = {
+                'status': 'blocked_before_reasoning',
+                'final_decision': 'REJECT',
+                'strategy': (adaptive_plan or {}).get('strategy_name') or sig_meta.get('strategy_name') or sig_meta.get('strategy'),
+                'regime': (adaptive_plan or {}).get('regime'),
+                'operator_summary': {
+                    'overall_confidence': None,
+                    'contradiction_count': 0,
+                    'highest_risk_axis': 'policy',
+                    'bounded': True,
+                    'blocked_before_reasoning': True,
+                },
+                'contradictions': ['policy_freeze_block'],
+            }
+            sig_meta['final_decision'] = 'REJECT'
+            sig_meta['decision_merge'] = {
+                'pre_ai_final_decision': 'REJECT',
+                'event_merge_reason': risk_reason,
+                'freshness_reason': None,
+                'event_adjusted_score': None,
+            }
+            sig_data['meta'] = sig_meta
+            sig_data['status'] = 'rejected'
+            sig_data['reason'] = risk_reason
+            context['sig_data'] = sig_data
+            context['policy_state'] = policy_state
+            context['pre_persist_blocked'] = True
+            context['pre_persist_block_reason'] = risk_reason
+            return context
         # 2. Risk check (with correlation candles_map if aggregator available)
         risk = RiskManager(db)
-        candles_map = None
-        if self._aggregator is not None:
-            candles_map = {
-                t: self._aggregator.get_history(t)
-                for t in self._aggregator._history.keys()
-            }
-            # Ensure current ticker is in map
-            if ticker not in candles_map:
-                candles_map[ticker] = candle_history
+        candles_map = build_correlation_candles_map(db, self._aggregator, ticker, candle_history)
         risk_ok, risk_reason = risk.check_new_signal(sig_data, candles_map=candles_map)
         if not risk_ok:
-            logger.info("%s: blocked by risk — %s", ticker, risk_reason)
-            record_risk_block(risk_reason)
-            _append_decision_log(
-                db,
-                log_type="signal_risk_block",
-                message=f"{ticker} blocked by risk: {risk_reason}",
-                payload={"instrument_id": ticker, "risk_reason": risk_reason, "risk_detail": getattr(risk, "last_check_details", None), "signal": _json_safe(sig_data)},
-            )
-            return None
+            risk_detail = dict(getattr(risk, 'last_check_details', {}) or {})
+            cooldown_override = str(risk_detail.get('blocked_by') or '') == 'loss_streak_cooldown'
+            if cooldown_override:
+                logger.info("%s: cooldown-aware proceed after risk warning — %s", ticker, risk_reason)
+                sig_meta = dict(sig_data.get('meta') or {})
+                sig_meta['cooldown_context'] = {
+                    'active': True,
+                    'mode': 'conviction_aware',
+                    'reason': risk_reason,
+                    'risk_detail': _json_safe(risk_detail),
+                }
+                sig_data['meta'] = sig_meta
+                _append_decision_log(
+                    db,
+                    log_type="cooldown_aware_proceed",
+                    message=f"{ticker} proceeded under conviction-aware cooldown: {risk_reason}",
+                    payload={
+                        "instrument_id": ticker,
+                        "risk_reason": risk_reason,
+                        "risk_detail": _json_safe(risk_detail),
+                        "signal": _json_safe(sig_data),
+                    },
+                )
+                risk_ok = True
+                risk_reason = ''
+            if not risk_ok:
+                logger.info("%s: blocked by risk — %s", ticker, risk_reason)
+                record_risk_block(risk_reason)
+                _append_decision_log(
+                    db,
+                    log_type="signal_risk_block",
+                    message=f"{ticker} blocked by risk: {risk_reason}",
+                    payload={"instrument_id": ticker, "risk_reason": risk_reason, "risk_detail": getattr(risk, "last_check_details", None), "signal": _json_safe(sig_data)},
+                )
+                sig_meta = dict(sig_data.get('meta') or {})
+                sig_meta['pre_persist_block'] = {
+                    'code': 'risk_block',
+                    'reason': risk_reason,
+                    'stage': 'risk_blocked',
+                    'ts': int(time.time() * 1000),
+                    'risk_detail': _json_safe(getattr(risk, 'last_check_details', None)),
+                }
+                sig_meta['candidate_snapshot'] = _build_pre_persist_candidate_payload(
+                    ticker=ticker,
+                    sig_data=sig_data,
+                    strategy_name=(adaptive_plan or {}).get('strategy_name'),
+                    stage='risk_blocked',
+                    block_code='risk_block',
+                    block_reason=risk_reason,
+                )
+                sig_meta['final_decision'] = 'REJECT'
+                sig_meta['decision_merge'] = {
+                    'pre_ai_final_decision': 'REJECT',
+                    'event_merge_reason': risk_reason,
+                    'freshness_reason': None,
+                    'event_adjusted_score': None,
+                }
+                sig_data['meta'] = sig_meta
+                sig_data['status'] = 'rejected'
+                sig_data['reason'] = risk_reason
+                context['sig_data'] = sig_data
+                context['risk'] = risk
+                context['pre_persist_blocked'] = True
+                context['pre_persist_block_reason'] = risk_reason
+                return context
 
         # 3. Position sizing
         sig_meta = dict(sig_data.get('meta') or {})
@@ -213,16 +317,35 @@ class SignalProcessor:
         optimizer_mult = float((optimizer_overlay or {}).get('optimizer_risk_multiplier') or 1.0)
         base_risk_mult = float((adaptive_plan or {}).get("risk_multiplier") or 1.0)
         policy_mult = float(getattr(policy_state, 'risk_multiplier_override', 1.0) or 1.0)
-        combined_risk_mult = max(0.0, base_risk_mult * optimizer_mult * policy_mult)
+        conviction_profile = dict(sig_meta.get('conviction_profile') or {})
+        conviction_risk_bias = float(conviction_profile.get('risk_tier_bias') or 1.0)
+        conviction_risk_bias = max(0.9, min(1.08, conviction_risk_bias))
+        cooldown_context = dict(sig_meta.get('cooldown_context') or {})
+        cooldown_risk_bias = 1.0
+        if bool(cooldown_context.get('active')):
+            tier = str(conviction_profile.get('tier') or 'C')
+            if tier == 'A+':
+                cooldown_risk_bias = 0.72
+            elif tier == 'A':
+                cooldown_risk_bias = 0.62
+            elif tier == 'B':
+                cooldown_risk_bias = 0.45
+            else:
+                cooldown_risk_bias = 0.0
+        combined_risk_mult = max(0.0, base_risk_mult * optimizer_mult * policy_mult * conviction_risk_bias)
+        combined_risk_mult = max(0.0, combined_risk_mult * cooldown_risk_bias)
         sig_data["size"] = float(risk.calculate_position_size(
             entry=sig_data["entry"], sl=sig_data["sl"], lot_size=1,
             risk_multiplier=combined_risk_mult,
         ))
         sig_meta['portfolio_optimizer'] = dict(optimizer_overlay or {})
+        sig_meta['sector_filters'] = apply_sector_overrides(settings, ticker)
         sig_meta['risk_sizing'] = dict(getattr(risk, 'last_size_details', {}) or {})
         sig_meta['risk_sizing']['base_signal_risk_multiplier'] = round(base_risk_mult, 4)
         sig_meta['risk_sizing']['optimizer_risk_multiplier'] = round(optimizer_mult, 4)
         sig_meta['risk_sizing']['auto_policy_risk_multiplier'] = round(policy_mult, 4)
+        sig_meta['risk_sizing']['conviction_risk_multiplier'] = round(conviction_risk_bias, 4)
+        sig_meta['risk_sizing']['cooldown_risk_multiplier'] = round(cooldown_risk_bias, 4)
         sig_meta['risk_sizing']['combined_signal_risk_multiplier'] = round(combined_risk_mult, 4)
         sig_meta['auto_policy'] = policy_state.to_meta()
         sig_data['meta'] = sig_meta
@@ -256,7 +379,37 @@ class SignalProcessor:
                 message=f"{ticker} blocked by risk: {risk_reason}",
                 payload={"instrument_id": ticker, "risk_reason": risk_reason, "risk_detail": getattr(risk, "last_check_details", None), "signal": _json_safe(sig_data)},
             )
-            return None
+            sig_meta = dict(sig_data.get('meta') or {})
+            sig_meta['pre_persist_block'] = {
+                'code': 'zero_size',
+                'reason': risk_reason,
+                'stage': 'risk_blocked',
+                'ts': int(time.time() * 1000),
+                'risk_detail': _json_safe(getattr(risk, 'last_check_details', None)),
+            }
+            sig_meta['candidate_snapshot'] = _build_pre_persist_candidate_payload(
+                ticker=ticker,
+                sig_data=sig_data,
+                strategy_name=(adaptive_plan or {}).get('strategy_name'),
+                stage='risk_blocked',
+                block_code='zero_size',
+                block_reason=risk_reason,
+            )
+            sig_meta['final_decision'] = 'REJECT'
+            sig_meta['decision_merge'] = {
+                'pre_ai_final_decision': 'REJECT',
+                'event_merge_reason': risk_reason,
+                'freshness_reason': None,
+                'event_adjusted_score': None,
+            }
+            sig_data['meta'] = sig_meta
+            sig_data['status'] = 'rejected'
+            sig_data['reason'] = risk_reason
+            context['sig_data'] = sig_data
+            context['risk'] = risk
+            context['pre_persist_blocked'] = True
+            context['pre_persist_block_reason'] = risk_reason
+            return context
 
         # 4. Check for existing pending signal
         pending_ttl_sec = int(getattr(settings, 'pending_review_ttl_sec', 900) or 900)
@@ -463,6 +616,12 @@ class SignalProcessor:
         de_reasons = [r.model_dump() for r in evaluation.reasons]
         strategy_name = (sig_data.get('meta') or {}).get("strategy_name") or (sig_data.get('meta') or {}).get("strategy") or strategy_name
         regime_name = str((event_meta or {}).get('regime') or (adaptive_plan or {}).get('regime') or (sig_data.get('meta') or {}).get('regime') or 'unknown')
+        sig_meta = dict(sig_data.get('meta') or {})
+        if sig_meta.get('analysis_timeframe'):
+            sig_meta['thesis_timeframe'] = sig_meta.get('thesis_timeframe') or sig_meta.get('analysis_timeframe')
+            sig_meta['execution_timeframe'] = sig_meta.get('execution_timeframe') or normalize_timeframe((adaptive_plan or {}).get('execution_timeframe') or '1m', '1m')
+            sig_meta['market_regime_profile'] = sig_meta.get('market_regime_profile') or regime_name
+            sig_data['meta'] = sig_meta
         section_started = time.perf_counter()
         perf_governor = evaluate_signal_governor(
             db,
@@ -597,6 +756,45 @@ class SignalProcessor:
         event_adjusted_score = freshness_score
         freshness_blocked = bool(freshness_meta.get('blocked'))
         merge_payload = None
+        conviction_profile = _build_conviction_profile(
+            final_decision=final_decision,
+            score=event_adjusted_score,
+            threshold=effective_threshold,
+            evaluation=evaluation,
+            perf_governor=perf_governor,
+            freshness_meta=freshness_meta,
+        )
+        sig_meta = dict(sig_data.get('meta') or {})
+        sig_meta['conviction_profile'] = conviction_profile
+        sig_data['meta'] = sig_meta
+        promoted_decision, promotion_reason, promotion_meta = _promote_high_conviction_skip(
+            final_decision=final_decision,
+            score=event_adjusted_score,
+            threshold=effective_threshold,
+            evaluation=evaluation,
+            perf_governor=perf_governor,
+            freshness_meta=freshness_meta,
+            conviction_profile=conviction_profile,
+        )
+        if promoted_decision != final_decision:
+            final_decision = promoted_decision
+            event_merge_reason = f"{event_merge_reason}; {promotion_reason}"
+            sig_meta = dict(sig_data.get('meta') or {})
+            sig_meta['high_conviction_promotion'] = promotion_meta
+            sig_data['meta'] = sig_meta
+            _append_decision_log(
+                db,
+                log_type='high_conviction_promotion',
+                message=f"{ticker} promoted from SKIP to TAKE by high-conviction rule",
+                payload={
+                    'signal_id': signal_orm.id,
+                    'trace_id': trace_id,
+                    'instrument_id': ticker,
+                    'promotion': promotion_meta,
+                    'score': int(event_adjusted_score),
+                    'threshold': int(effective_threshold),
+                },
+            )
 
         if freshness_meta.get('applied'):
             _append_decision_log(
@@ -618,9 +816,40 @@ class SignalProcessor:
             )
         decision_timing['freshness_ms'] = _elapsed_ms(section_started)
 
+        selective_policy_blocked = False
+        selective_policy_reason = ''
+        if policy_state and getattr(policy_state, 'state', '') == 'frozen' and bool(getattr(policy_state, 'selective_throttle', False)):
+            selective_policy_blocked, selective_policy_reason = _evaluate_selective_policy_throttle(
+                policy_state=policy_state,
+                final_decision=final_decision,
+                score=event_adjusted_score,
+                threshold=effective_threshold,
+                sig_data=sig_data,
+                perf_governor=perf_governor,
+                freshness_meta=freshness_meta,
+            )
+            if selective_policy_blocked:
+                final_decision = 'REJECT'
+                event_merge_reason = f"{event_merge_reason}; selective throttle"
+                _append_decision_log(
+                    db,
+                    log_type='auto_runtime_guard',
+                    message=f"{ticker} blocked by selective throttle during frozen mode",
+                    payload={
+                        'signal_id': signal_orm.id,
+                        'trace_id': trace_id,
+                        'instrument_id': ticker,
+                        'policy': policy_state.to_meta(),
+                        'reason': selective_policy_reason,
+                        'score': int(event_adjusted_score),
+                        'threshold': int(effective_threshold),
+                        'r': float(sig_data.get('r') or 0.0),
+                    },
+                )
+
         ai_fast_path = None
         section_started = time.perf_counter()
-        if ai_mode != AIMode.OFF:
+        if ai_mode != AIMode.OFF and not selective_policy_blocked:
             from apps.worker.ai.types import AIContext
             from apps.worker.ai.router import AIProviderRouter
 
@@ -676,6 +905,18 @@ class SignalProcessor:
                     de_metrics=dict(evaluation.metrics),
                     limit=4,
                 )
+                sentiment_sector = None
+                if isinstance(symbol_profile, dict):
+                    sentiment_sector = symbol_profile.get('sector') or symbol_profile.get('sector_id')
+                if not sentiment_sector:
+                    sentiment_sector = (get_instrument_sector_payload(ticker) or {}).get('sector')
+                trader_sentiment = build_prompt_sentiment_context(
+                    db,
+                    instrument_id=ticker,
+                    sector=sentiment_sector,
+                    settings=settings,
+                    max_items=3,
+                )
                 ai_ctx = AIContext(
                     signal_id=signal_orm.id,
                     instrument_id=ticker,
@@ -696,6 +937,7 @@ class SignalProcessor:
                     symbol_diagnostics=symbol_diagnostics,
                     event_regime=event_meta,
                     geometry=dict((sig_data.get('meta') or {}).get('geometry_optimizer') or {}),
+                    trader_sentiment=trader_sentiment,
                 )
 
                 router_config = SimpleNamespace(
@@ -775,16 +1017,33 @@ class SignalProcessor:
         # 9. Save decision metadata
         section_started = time.perf_counter()
         signal_orm.ai_influenced = bool(ai_result is not None and ai_mode != AIMode.OFF)
-        signal_orm.ai_mode_used = ai_mode.value if ai_mode != AIMode.OFF else "off"
+        signal_orm.ai_mode_used = ai_mode.value if ai_mode != AIMode.OFF and not selective_policy_blocked else "off"
         signal_orm.ai_decision_id = ai_log_record.id if ai_log_record else None
 
         meta = dict(signal_orm.meta or {})
+        cognitive_payload = build_cognitive_layer_payload(
+            ticker=ticker,
+            side=sig_data['side'],
+            sig_data=sig_data,
+            evaluation=evaluation,
+            final_decision=final_decision,
+            effective_threshold=effective_threshold,
+            adaptive_plan=adaptive_plan,
+            event_regime=event_meta,
+            freshness_meta=freshness_meta,
+            perf_governor=perf_governor,
+            trader_sentiment=locals().get('trader_sentiment'),
+            ai_result=ai_result,
+        )
         if adaptive_plan:
             meta["adaptive_plan"] = adaptive_plan
         meta["decision"] = evaluation.model_dump(mode="json")
         meta["event_regime"] = event_meta
         meta["event_adjusted_score"] = event_adjusted_score
+        meta["conviction_profile"] = conviction_profile
+        meta["high_conviction_promotion"] = promotion_meta
         meta["signal_freshness"] = freshness_meta
+        meta['auto_policy'] = getattr(policy_state, 'to_meta', lambda: policy_state)() if policy_state else meta.get('auto_policy')
         meta["symbol_brain"] = {
             "strategy_name": strategy_name,
             "strategy_source": (adaptive_plan or {}).get('strategy_source') if isinstance(adaptive_plan, dict) else None,
@@ -799,6 +1058,27 @@ class SignalProcessor:
             meta["symbol_diagnostics"] = symbol_diagnostics if 'symbol_diagnostics' in locals() else None
         if ai_fast_path is not None:
             meta["ai_fast_path"] = ai_fast_path.to_meta()
+        if selective_policy_blocked:
+            meta['pre_persist_block'] = {
+                'code': 'auto_freeze_selective_throttle',
+                'reason': selective_policy_reason,
+                'stage': 'policy_blocked',
+                'ts': int(time.time() * 1000),
+            }
+            meta['candidate_snapshot'] = _build_pre_persist_candidate_payload(
+                ticker=ticker,
+                sig_data=sig_data,
+                strategy_name=(adaptive_plan or {}).get('strategy_name') or strategy_name,
+                stage='policy_blocked',
+                block_code='auto_freeze_selective_throttle',
+                block_reason=selective_policy_reason,
+            )
+            cognitive_payload['status'] = 'blocked_after_reasoning'
+            cognitive_payload['contradictions'] = list(dict.fromkeys([*(cognitive_payload.get('contradictions') or []), 'policy_selective_throttle']))
+            operator_summary = dict(cognitive_payload.get('operator_summary') or {})
+            operator_summary['blocked_after_reasoning'] = True
+            operator_summary['highest_risk_axis'] = 'policy'
+            cognitive_payload['operator_summary'] = operator_summary
         if ai_result:
             meta["ai_prompt_profile"] = "intraday_dynamic_v3_research_scalp"
             meta["ai_decision"] = {
@@ -809,6 +1089,7 @@ class SignalProcessor:
                 "key_factors": ai_result.key_factors,
             }
         meta["final_decision"] = final_decision
+        meta['cognitive_layer'] = cognitive_payload
         if merge_payload:
             meta["decision_merge"] = merge_payload
         else:
@@ -947,9 +1228,11 @@ class SignalProcessor:
         if final_decision == "TAKE":
             execution_error_reason = None
             uow = SignalExecutionUnitOfWork(db, signal_id=signal_orm.id, trace_id=trace_id)
+            current_settings = settings_repo.get_settings(db)
+            force_paper = trade_mode == "auto_live" and prefers_paper_execution(current_settings)
             try:
                 uow.mark('begin', trade_mode=trade_mode)
-                if trade_mode == "auto_paper":
+                if trade_mode == "auto_paper" or force_paper:
                     signal_repo.update_signal_status(db, signal_orm.id, "approved", commit=False)
                     uow.mark('signal_approved')
                     uow.commit()
@@ -1038,6 +1321,8 @@ class SignalProcessor:
                 'telemetry': telemetry,
             }
 
+        pre_persist_blocked = bool(context.get('pre_persist_blocked'))
+
         stage_started = time.perf_counter()
         context = self._persist_signal(db, context)
         telemetry['persist_signal_ms'] = _elapsed_ms(stage_started)
@@ -1048,6 +1333,20 @@ class SignalProcessor:
                 'created_signal': False,
                 'outcome': 'persist_failed',
                 'telemetry': telemetry,
+            }
+
+        if pre_persist_blocked:
+            full_telemetry = dict(telemetry)
+            full_telemetry['total_ms'] = _elapsed_ms(total_started)
+            signal_orm = context['signal_orm']
+            return {
+                'ok': True,
+                'created_signal': True,
+                'outcome': 'blocked_pre_persist_persisted',
+                'signal_id': str(signal_orm.id),
+                'status': getattr(signal_orm, 'status', None),
+                'final_decision': 'REJECT',
+                'telemetry': full_telemetry,
             }
 
         stage_started = time.perf_counter()

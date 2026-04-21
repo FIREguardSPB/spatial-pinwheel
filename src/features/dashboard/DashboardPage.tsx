@@ -45,7 +45,10 @@ export default function DashboardPage() {
   const latestCandleTs = latestChartCandleTs ?? latestCoordinatorCandleTs;
   const [nowTs, setNowTs] = useState(0);
   const candleAgeMinutes = latestCandleTs && nowTs ? Math.max(0, Math.floor((nowTs - latestCandleTs) / 60000)) : null;
-  const candleStale = candleAgeMinutes !== null && candleAgeMinutes >= (selectedTimeframe === '1m' ? 3 : selectedTimeframe === '5m' ? 12 : selectedTimeframe === '15m' ? 35 : 180);
+  const sessionIsOpen = Boolean(schedule?.is_open);
+  const isTradingDay = Boolean(schedule?.is_trading_day);
+  const staleThresholdMinutes = selectedTimeframe === '1m' ? 3 : selectedTimeframe === '5m' ? 12 : selectedTimeframe === '15m' ? 35 : 180;
+  const candleStale = candleAgeMinutes !== null && sessionIsOpen && isTradingDay && candleAgeMinutes >= staleThresholdMinutes;
 
   useEffect(() => {
     if (!latestCandleTs) {
@@ -125,8 +128,8 @@ export default function DashboardPage() {
           className="min-h-[420px]"
         >
           <QueryBlock
-            isLoading={page.isLoading}
-            isError={page.isError}
+            isLoading={page.isLoading && !page.data}
+            isError={page.isError && !page.data}
             errorMessage="Не удалось загрузить данные дашборда"
             onRetry={refetchAll}
           >
@@ -144,7 +147,7 @@ export default function DashboardPage() {
         </Surface>
 
         <Surface title="Кривая счёта" description="Баланс и equity за последние 7 дней.">
-          <QueryBlock isLoading={page.isLoading} isError={page.isError} errorMessage="Не удалось загрузить историю счёта" onRetry={refetchAll}>
+          <QueryBlock isLoading={page.isLoading && !page.data} isError={page.isError && !page.data} errorMessage="Не удалось загрузить историю счёта" onRetry={refetchAll}>
             <SimpleAreaChart
               data={(history?.points ?? []).map((point) => ({ label: point.ts, equity: point.equity }))}
               xKey="label"
@@ -160,7 +163,7 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Surface title="Runtime" description="Состояние бота, воркера и сессии рынка из одного coordinator payload.">
-          <QueryBlock isLoading={page.isLoading} isError={page.isError} errorMessage="Не удалось загрузить runtime" onRetry={refetchAll}>
+          <QueryBlock isLoading={page.isLoading && !page.data} isError={page.isError && !page.data} errorMessage="Не удалось загрузить runtime" onRetry={refetchAll}>
             <div className="space-y-2">
               <ValueRow label="Статус бота" value={(<StatusChip tone={isRunning ? 'good' : 'warn'}>{isRunning ? 'Запущен' : 'Остановлен'}</StatusChip>)} />
               <ValueRow label="Режим" value={(<StatusChip tone="blue">{fmtMode(mode)}</StatusChip>)} />
@@ -187,7 +190,7 @@ export default function DashboardPage() {
         </Surface>
 
         <Surface title="Счёт и активность" description="Ключевые показатели, позиции, ордера и сигналы в одном месте.">
-          <QueryBlock isLoading={page.isLoading} isError={page.isError} errorMessage="Не удалось загрузить счёт" onRetry={refetchAll}>
+          <QueryBlock isLoading={page.isLoading && !page.data} isError={page.isError && !page.data} errorMessage="Не удалось загрузить счёт" onRetry={refetchAll}>
             <div className="space-y-2">
               <ValueRow label="Equity" value={fmtMoney(summary?.equity)} />
               <ValueRow label="Открытых позиций" value={fmtNumber(positions.length, 0)} />
@@ -200,7 +203,7 @@ export default function DashboardPage() {
       </div>
 
       <Surface title="Профилирование worker pipeline" description="Живые timings по последнему meaningful анализу: видно, где бот реально тратит время.">
-        <QueryBlock isLoading={page.isLoading} isError={page.isError} errorMessage="Не удалось загрузить telemetry воркера" onRetry={refetchAll}>
+        <QueryBlock isLoading={page.isLoading && !page.data} isError={page.isError && !page.data} errorMessage="Не удалось загрузить telemetry воркера" onRetry={refetchAll}>
           <WorkerAnalysisInspector workerStatus={workerStatus} />
         </QueryBlock>
       </Surface>

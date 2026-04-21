@@ -19,6 +19,17 @@ _TIMEFRAME_MS: dict[str, int] = {
 _MSK = ZoneInfo('Europe/Moscow')
 
 
+def _as_epoch_ms(value: Any) -> int:
+    ts = int(value or 0)
+    if ts <= 0:
+        return 0
+    # Worker aggregator stores candle times in epoch seconds, while DB/API paths
+    # often use epoch milliseconds. Normalize both into milliseconds.
+    if ts < 10_000_000_000:
+        return ts * 1000
+    return ts
+
+
 def normalize_timeframe(value: str | None, default: str = '1m') -> str:
     raw = str(value or default).strip().lower()
     return raw if raw in _TIMEFRAME_MS else default
@@ -48,8 +59,123 @@ def next_higher_timeframe(value: str | None) -> str:
     return ordered[min(idx + 1, len(ordered) - 1)]
 
 
+def build_higher_tf_continuation_thesis(candles: list[dict[str, Any]], *, timeframe: str) -> dict[str, Any] | None:
+    tf = normalize_timeframe(timeframe, '15m')
+    if tf not in {'5m', '15m', '30m', '1h'}:
+        return None
+    if len(candles) < 20:
+        return None
+
+    closes = [float(c.get('close') or 0.0) for c in candles[-20:]]
+    highs = [float(c.get('high') or c.get('close') or 0.0) for c in candles[-20:]]
+    lows = [float(c.get('low') or c.get('close') or 0.0) for c in candles[-20:]]
+    if min(closes) <= 0:
+        return None
+
+    start_close = closes[0]
+    end_close = closes[-1]
+    trend_up = end_close > start_close * 1.01
+    trend_down = end_close < start_close * 0.99
+    if not trend_up and not trend_down:
+        return None
+
+    prev_high = max(highs[:-1])
+    prev_low = min(lows[:-1])
+    last_close = closes[-1]
+    last_high = highs[-1]
+    last_low = lows[-1]
+    recent_closes = closes[-5:]
+    recent_highs = highs[-5:]
+    recent_lows = lows[-5:]
+    avg_range = sum((h - l) for h, l in zip(highs, lows)) / max(1, len(highs))
+    near_buffer = max(avg_range * 0.35, last_close * 0.0015)
+    pullback_window = max(4, len(closes) // 4)
+
+    def _payload(side: str, structure: str) -> dict[str, Any]:
+        return {
+            'side': side,
+            'thesis_timeframe': tf,
+            'thesis_type': 'continuation',
+            'structure': structure,
+        }
+
+    if trend_up and last_close >= prev_high - near_buffer and last_high >= prev_high:
+        return _payload('BUY', 'near_high_break_continuation')
+    if trend_down and last_close <= prev_low + near_buffer and last_low <= prev_low:
+        return _payload('SELL', 'near_low_break_continuation')
+
+    fast_trend_up = recent_closes[-1] > recent_closes[0] * 1.003
+    fast_trend_down = recent_closes[-1] < recent_closes[0] * 0.997
+    recent_pullback_low = min(lows[-pullback_window:])
+    recent_pullback_high = max(highs[-pullback_window:])
+    higher_low_preserved = recent_pullback_low >= (start_close + (end_close - start_close) * 0.58)
+    lower_high_preserved = recent_pullback_high <= (start_close + (end_close - start_close) * 0.42)
+    reclaimed_recent_high = last_close >= max(recent_highs[:-1]) - near_buffer * 0.8
+    reclaimed_recent_low = last_close <= min(recent_lows[:-1]) + near_buffer * 0.8
+
+    if trend_up and last_close >= prev_high - near_buffer * 1.8 and fast_trend_up:
+        return _payload('BUY', 'trend_continuation')
+    if trend_down and last_close <= prev_low + near_buffer * 1.8 and fast_trend_down:
+        return _payload('SELL', 'trend_continuation')
+
+    if trend_up and higher_low_preserved and recent_closes[-1] > recent_closes[-2] > recent_closes[-3] and reclaimed_recent_high:
+        return _payload('BUY', 'pullback_hold_continuation')
+    if trend_down and lower_high_preserved and recent_closes[-1] < recent_closes[-2] < recent_closes[-3] and reclaimed_recent_low:
+        return _payload('SELL', 'pullback_hold_continuation')
+
+    recent_sweep_low = min(recent_lows)
+    recent_sweep_high = max(recent_highs)
+
+    if trend_down and recent_sweep_low <= prev_low + near_buffer and last_close >= min(recent_closes[:-1]) + avg_range * 1.4 and last_close >= recent_closes[-2] + avg_range * 0.5:
+        return _payload('BUY', 'failed_breakdown_reclaim')
+    if trend_up and recent_sweep_high >= prev_high - near_buffer and last_close <= max(recent_closes[:-1]) - avg_range * 1.4 and last_close <= recent_closes[-2] - avg_range * 0.5:
+        return _payload('SELL', 'failed_breakout_reclaim')
+    return None
+
+
+def select_timeframe_stack_for_regime(regime_input: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(regime_input or {})
+    trend_strength = max(0.0, min(1.0, float(payload.get('trend_strength') or 0.0)))
+    noise_ratio = max(0.0, min(1.0, float(payload.get('noise_ratio') or 0.0)))
+    event_pressure = max(0.0, min(1.0, float(payload.get('event_pressure') or 0.0)))
+    instrument_class = str(payload.get('instrument_class') or 'equity')
+
+    profile = 'balanced'
+    context_tf = '15m'
+    thesis_tfs = ['5m', '15m']
+    execution_tf = '1m'
+    allows_1m_thesis_exception = False
+
+    if trend_strength >= 0.7 and noise_ratio <= 0.3:
+        profile = 'trend_continuation'
+        context_tf = '30m'
+        thesis_tfs = ['15m', '5m']
+    elif event_pressure >= 0.85 and noise_ratio >= 0.75:
+        profile = 'event_burst'
+        context_tf = '15m'
+        thesis_tfs = ['5m', '3m', '1m']
+        execution_tf = '1m'
+        allows_1m_thesis_exception = instrument_class in {'futures', 'crypto', 'fx', 'index'}
+        if not allows_1m_thesis_exception:
+            thesis_tfs = ['5m', '3m']
+
+    thesis_tfs = [normalize_timeframe(tf, '5m') for tf in thesis_tfs]
+    deduped: list[str] = []
+    for tf in thesis_tfs:
+        if tf not in deduped:
+            deduped.append(tf)
+
+    return {
+        'market_regime_profile': profile,
+        'context_timeframe': context_tf,
+        'thesis_timeframes': deduped,
+        'execution_timeframe': execution_tf,
+        'allows_1m_thesis_exception': allows_1m_thesis_exception,
+    }
+
+
 def _infer_source_step_ms(candles: list[dict[str, Any]]) -> int:
-    timestamps = sorted({int(item.get('time') or 0) for item in candles if int(item.get('time') or 0) > 0})
+    timestamps = sorted({_as_epoch_ms(item.get('time')) for item in candles if _as_epoch_ms(item.get('time')) > 0})
     if len(timestamps) < 2:
         return _TIMEFRAME_MS['1m']
     deltas = [cur - prev for prev, cur in zip(timestamps[:-1], timestamps[1:]) if cur - prev > 0]
@@ -99,7 +225,7 @@ def resample_candles(
     day_anchors: dict[str, int] = {}
 
     for candle in ordered:
-        ts = int(candle.get('time') or 0)
+        ts = _as_epoch_ms(candle.get('time'))
         if ts <= 0:
             continue
         day_key = _local_trading_day(ts)

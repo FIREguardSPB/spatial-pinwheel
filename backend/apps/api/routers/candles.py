@@ -41,6 +41,27 @@ def _allow_remote_fetch(cache_key: str) -> bool:
     return True
 
 
+def _normalize_candle_time_sec(value: int | float | None) -> int | None:
+    if value is None:
+        return None
+    raw = int(value)
+    if raw <= 0:
+        return None
+    return raw // 1000 if raw >= 10_000_000_000 else raw
+
+
+def _cache_is_stale(cached: list[dict], tf: str) -> bool:
+    if not cached:
+        return True
+    last = cached[-1] or {}
+    last_time = _normalize_candle_time_sec(last.get('time'))
+    if not last_time:
+        return True
+    age_sec = max(0, int(time.time()) - last_time)
+    # Allow a few bars of slack before considering the cache stale.
+    return age_sec > max(_tf_seconds(tf) * 3, 180)
+
+
 @router.get("/{ticker}", response_model=List[Candle])
 async def get_candles(ticker: str, tf: str = "15m", db: Session = Depends(get_db)):
     from core.config import get_token, settings
@@ -55,11 +76,9 @@ async def get_candles(ticker: str, tf: str = "15m", db: Session = Depends(get_db
     runtime_tbank_account = get_token("TBANK_ACCOUNT_ID") or settings.TBANK_ACCOUNT_ID
     can_fetch_market = bool(runtime_tbank_token)
 
-    if cached:
-        return cached
-
     cache_key = f"{ticker}:{tf}"
-    if can_fetch_market and _allow_remote_fetch(cache_key):
+    should_refresh = can_fetch_market and (not cached or _cache_is_stale(cached, tf))
+    if should_refresh and _allow_remote_fetch(cache_key):
         # Cold-start fallback only. If local cache already exists, we serve it as-is
         # and let the worker refresh market data, instead of hammering T-Bank every 15s.
         from apps.broker.tbank import TBankGrpcAdapter
@@ -79,8 +98,10 @@ async def get_candles(ticker: str, tf: str = "15m", db: Session = Depends(get_db
                 return candles
         except Exception as e:
             logger.warning("Fallback fetch candles failed for %s: %s", ticker, e, exc_info=True)
-    elif can_fetch_market:
+    elif can_fetch_market and not cached:
         logger.info("Skip remote candle fetch for %s/%s, empty cache still under cooldown", ticker, tf)
 
-    raise HTTPException(status_code=503, detail={'message': 'No real candle data available', 'instrument_id': ticker, 'timeframe': tf})
+    if cached:
+        return cached
 
+    raise HTTPException(status_code=503, detail={'message': 'No real candle data available', 'instrument_id': ticker, 'timeframe': tf})

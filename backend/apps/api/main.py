@@ -31,7 +31,7 @@ from starlette.background import BackgroundTask
 from apps.api.deps import verify_token, verify_token_query
 from apps.api.middleware import AccessLogMiddleware, RequestIDMiddleware, SecurityHeadersMiddleware, RateLimitMiddleware
 from apps.api.routers import tokens as tokens_router
-from apps.api.routers import candles, logs, settings, signals, state, stream, ai, backtest, trades, account, watchlist, orders_manual, bot, worker, metrics, risk, trace, tbank, symbol_profiles, event_regimes, paper, validation, forensics, ml, ui
+from apps.api.routers import candles, logs, settings, signals, state, stream, ai, backtest, trades, account, watchlist, orders_manual, bot, worker, metrics, risk, trace, tbank, symbol_profiles, event_regimes, paper, validation, forensics, ml, ui, sentiment
 from core.config import get_token, settings as config
 from core.logging import configure_logging
 from core.metrics import setup_metrics_endpoint
@@ -60,7 +60,15 @@ _TRIM_PATH_PREFIXES = (
     f"{config.API_PREFIX}/account",
     f"{config.API_PREFIX}/signals",
 )
-_RECYCLING_REQUEST_LIMIT = max(0, int(os.getenv("API_HEAVY_READ_RECYCLE_LIMIT", "8") or 8))
+_RECYCLING_REQUEST_LIMIT = max(
+    0,
+    int(
+        os.getenv(
+            "API_HEAVY_READ_RECYCLE_LIMIT",
+            "0" if config.APP_ENV == "dev" else "8",
+        ) or ("0" if config.APP_ENV == "dev" else "8")
+    ),
+)
 _HEAVY_READ_REQUESTS = 0
 _RECYCLE_ARMED = False
 
@@ -131,6 +139,8 @@ async def _trim_memory_background(existing_task=None, recycle_worker: bool = Fal
 @app.middleware("http")
 async def trim_memory_after_heavy_reads(request, call_next):
     response = await call_next(request)
+    if config.APP_ENV == "dev":
+        return response
     path = request.url.path
     should_trim = request.method == "GET" and (
         path == "/health"
@@ -193,10 +203,11 @@ async def health():
 
     try:
         from core.events.bus import bus
+        bus._ensure_client()
         await bus.redis.ping()
         components["redis"] = {"status": "ok"}
     except Exception as e:
-        components["redis"] = {"status": "error", "detail": str(e)}
+        components["redis"] = {"status": "warning" if config.ALLOW_NO_REDIS else "error", "detail": str(e)}
         if not config.ALLOW_NO_REDIS:
             ok = False
 
@@ -280,6 +291,8 @@ app.include_router(backtest.router, prefix=config.API_PREFIX + "/backtest",    t
 app.include_router(ai.router,        prefix=config.API_PREFIX + "/ai",           tags=["ai"],          dependencies=_auth)
 app.include_router(ml.router,        prefix=config.API_PREFIX + "/ml",           tags=["ml"],          dependencies=_auth)
 app.include_router(ui.router,        prefix=config.API_PREFIX + '/ui',           tags=['ui'],          dependencies=_auth)
+app.include_router(sentiment.router, prefix=config.API_PREFIX + '/sentiment', tags=['sentiment'], dependencies=_auth)
+app.include_router(sentiment.admin_router, prefix=config.API_PREFIX + '/admin/sentiment', tags=['admin-sentiment'], dependencies=_auth)
 app.include_router(trades.router,    prefix=config.API_PREFIX + "/trades",       tags=["trades"],      dependencies=_auth)
 app.include_router(account.router,   prefix=config.API_PREFIX + "/account",      tags=["account"],     dependencies=_auth)
 app.include_router(bot.router,       prefix=config.API_PREFIX + "/bot",          tags=["bot"],         dependencies=_auth)

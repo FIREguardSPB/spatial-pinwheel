@@ -10,6 +10,8 @@ FIX32 goals:
 from __future__ import annotations
 
 import asyncio
+import atexit
+import fcntl
 import logging
 import os
 import signal
@@ -31,6 +33,8 @@ from core.services.recalibration import run_symbol_recalibration_batch
 from core.services.symbol_adaptive import ensure_symbol_profiles, build_symbol_plan
 from core.services.trading_schedule import refresh_trading_schedule
 from core.ml.runtime import maybe_run_scheduled_training
+from core.services.instrument_catalog import sync_sandbox_instruments
+from core.sentiment.collector import SentimentCollector
 from core.services.worker_status import publish_worker_status
 from core.storage.models import AccountSnapshot, Position, Signal
 from core.storage.repos import candles as candle_repo
@@ -38,6 +42,7 @@ from core.storage.repos import settings as settings_repo
 from core.storage.session import SessionLocal
 from core.strategy.selector import StrategySelector
 from core.execution.monitor import PositionMonitor
+from core.execution.controls import prefers_paper_execution
 from core.execution.paper import PaperExecutionEngine
 from core.execution.tbank import TBankExecutionEngine
 from core.utils.session import should_close_before_session_end
@@ -65,6 +70,32 @@ _DEFAULT_TICKERS = [
 ]
 _HIGH_PRIORITY_TICKERS = {"TQBR:SBER", "TQBR:GAZP", "TQBR:LKOH", "TQBR:YNDX", "TQBR:VTBR", "TQBR:MOEX"}
 _shutdown = asyncio.Event()
+_WORKER_LOCK_FD = None
+
+
+def _acquire_single_instance_lock() -> None:
+    global _WORKER_LOCK_FD
+    lock_path = os.getenv('WORKER_LOCK_PATH', '/tmp/spatial-pinwheel-worker.lock')
+    fd = open(lock_path, 'w')
+    try:
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise RuntimeError(f'Worker already running: lock busy at {lock_path}')
+    fd.seek(0)
+    fd.truncate()
+    fd.write(str(os.getpid()))
+    fd.flush()
+    _WORKER_LOCK_FD = fd
+
+
+def _release_single_instance_lock() -> None:
+    global _WORKER_LOCK_FD
+    if _WORKER_LOCK_FD is None:
+        return
+    try:
+        _WORKER_LOCK_FD.close()
+    finally:
+        _WORKER_LOCK_FD = None
 
 
 def _now_ms() -> int:
@@ -146,14 +177,15 @@ async def _persist_last_completed_candle(ticker: str, aggregator: CandleAggregat
 
 async def _load_cached_history(aggregator: CandleAggregator, tickers: list[str], tf_str: str) -> set[str]:
     primed: set[str] = set()
+    history_limit = 600 if tf_str == '1m' else 200
     async with get_db() as db:
         for ticker in tickers:
-            cached = candle_repo.list_candles(db, ticker, tf_str, limit=200)
+            cached = candle_repo.list_candles(db, ticker, tf_str, limit=history_limit)
             if not cached:
                 continue
             _prime_aggregator(aggregator, ticker, cached)
             primed.add(ticker)
-            logger.info("History cache bootstrap for %s: %d candles loaded", ticker, min(len(cached), 200))
+            logger.info("History cache bootstrap for %s: %d candles loaded", ticker, min(len(cached), history_limit))
     return primed
 
 
@@ -161,8 +193,9 @@ async def _bootstrap_history(adapter, aggregator: CandleAggregator, tickers: lis
     from datetime import timedelta
 
     now_dt = datetime.now(timezone.utc)
+    history_limit = 600 if tf_str == '1m' else 200
     lookback_by_tf = {
-        "1m": timedelta(hours=8),
+        "1m": timedelta(hours=24),
         "5m": timedelta(days=2),
         "15m": timedelta(days=5),
     }
@@ -178,10 +211,10 @@ async def _bootstrap_history(adapter, aggregator: CandleAggregator, tickers: lis
             logger.warning("History bootstrap failed for %s: %s", ticker, exc)
             continue
         if candles:
-            _prime_aggregator(aggregator, ticker, candles[-200:])
+            _prime_aggregator(aggregator, ticker, candles[-history_limit:])
             with SessionLocal() as cache_db:
                 candle_repo.upsert_candles(cache_db, instrument_id=ticker, timeframe=tf_str, candles=candles, source="broker")
-            logger.info("History bootstrap for %s: %d candles loaded", ticker, min(len(candles), 200))
+            logger.info("History bootstrap for %s: %d candles loaded", ticker, min(len(candles), history_limit))
 
 
 async def _load_watchlist() -> list[str]:
@@ -346,8 +379,8 @@ async def _refresh_watchlist_loop(state: WorkerRuntimeState, adapter, aggregator
                     watchlist=tickers,
                 )
             if adapter and added:
-                cached = await _load_cached_history(aggregator, added, tf_str)
-                await _bootstrap_history(adapter, aggregator, added[:bootstrap_limit], tf_str, skip_tickers=cached)
+                await _load_cached_history(aggregator, added, tf_str)
+                await _bootstrap_history(adapter, aggregator, added[:bootstrap_limit], tf_str)
             if added:
                 with SessionLocal() as db:
                     ensure_result = ensure_symbol_profiles(
@@ -443,6 +476,100 @@ async def _run_ml_training_loop(state: WorkerRuntimeState) -> None:
         await asyncio.sleep(300.0)
 
 
+async def _run_instrument_auto_sync_loop(state: WorkerRuntimeState, adapter_factory) -> None:
+    last_run_ts = 0
+    while not _shutdown.is_set():
+        try:
+            with SessionLocal() as db:
+                runtime_settings = settings_repo.get_settings(db)
+                enabled = bool(getattr(runtime_settings, 'instrument_auto_sync_enabled', False))
+                interval_hours = max(1, int(getattr(runtime_settings, 'instrument_auto_sync_interval_hours', 24) or 24))
+                now_ms = _now_ms()
+                due = last_run_ts <= 0 or (now_ms - last_run_ts) >= interval_hours * 3600 * 1000
+                if enabled and due:
+                    result = await sync_sandbox_instruments(
+                        db,
+                        adapter_factory=adapter_factory,
+                        limit=200,
+                        auto_train=True,
+                    )
+                    last_run_ts = now_ms
+                    await state.set_phase(
+                        state.phase,
+                        state.message,
+                        instrument_auto_sync={
+                            'last_run_ts': now_ms,
+                            'enabled': enabled,
+                            'interval_hours': interval_hours,
+                            'added': int(result.get('added') or 0),
+                            'existing': int(result.get('existing') or 0),
+                            'errors': result.get('errors') or [],
+                        },
+                    )
+                    await state.publish()
+                    logger.info('Instrument auto-sync finished: %s', result)
+                elif not enabled:
+                    await state.set_phase(
+                        state.phase,
+                        state.message,
+                        instrument_auto_sync={
+                            'last_run_ts': last_run_ts or None,
+                            'enabled': False,
+                            'interval_hours': interval_hours,
+                        },
+                    )
+        except Exception as exc:
+            logger.error('Instrument auto-sync loop failed: %s', exc, exc_info=True)
+            await state.mark_error('worker-instrument-auto-sync', exc)
+            await state.publish()
+        await asyncio.sleep(300.0)
+
+
+async def _run_sentiment_collection_loop(state: WorkerRuntimeState) -> None:
+    last_run_ts = 0
+    while not _shutdown.is_set():
+        try:
+            with SessionLocal() as db:
+                runtime_settings = settings_repo.get_settings(db)
+                enabled = bool(getattr(runtime_settings, 'sentiment_collection_enabled', False))
+                interval_minutes = max(5, int(getattr(runtime_settings, 'sentiment_poll_interval_minutes', 60) or 60))
+                now_ms = _now_ms()
+                due = last_run_ts <= 0 or (now_ms - last_run_ts) >= interval_minutes * 60 * 1000
+                if enabled and due:
+                    collector = SentimentCollector(db)
+                    result = await collector.collect_once(runtime_settings, force=False)
+                    last_run_ts = now_ms
+                    await state.set_phase(
+                        state.phase,
+                        state.message,
+                        sentiment_collection={
+                            'last_run_ts': now_ms,
+                            'enabled': enabled,
+                            'interval_minutes': interval_minutes,
+                            'inserted': int(result.get('inserted') or 0),
+                            'duplicates': int(result.get('skipped_duplicates') or 0),
+                            'errors': result.get('error_messages') or [],
+                        },
+                    )
+                    await state.publish()
+                    logger.info('Sentiment collection finished: %s', result)
+                elif not enabled:
+                    await state.set_phase(
+                        state.phase,
+                        state.message,
+                        sentiment_collection={
+                            'last_run_ts': last_run_ts or None,
+                            'enabled': False,
+                            'interval_minutes': interval_minutes,
+                        },
+                    )
+        except Exception as exc:
+            logger.error('Sentiment collection loop failed: %s', exc, exc_info=True)
+            await state.mark_error('worker-sentiment-collection', exc)
+            await state.publish()
+        await asyncio.sleep(300.0)
+
+
 async def _run_status_heartbeat_loop(state: WorkerRuntimeState) -> None:
     while not _shutdown.is_set():
         try:
@@ -450,6 +577,30 @@ async def _run_status_heartbeat_loop(state: WorkerRuntimeState) -> None:
         except Exception as exc:
             logger.warning('Worker status heartbeat publish failed: %s', exc, exc_info=True)
         await asyncio.sleep(60.0)
+
+
+async def _run_symbol_profile_bootstrap_task(state: WorkerRuntimeState, tickers: list[str], *, train_limit: int, timeframe: str, source: str) -> None:
+    try:
+        with SessionLocal() as db:
+            ensure_result = ensure_symbol_profiles(
+                db,
+                tickers,
+                auto_train=True,
+                lookback_days=180,
+                timeframe=timeframe,
+                train_limit=train_limit,
+                source=source,
+            )
+        await state.set_phase(state.phase, state.message, symbol_profiles_bootstrap=ensure_result)
+        await state.publish()
+    except Exception as exc:
+        logger.error('Symbol profile bootstrap task failed: %s', exc, exc_info=True)
+        await state.mark_error('symbol_profile_bootstrap', exc)
+        await state.publish()
+
+
+def _is_optional_worker_task(task_name: str) -> bool:
+    return task_name in {'worker-symbol-profile-bootstrap'}
 
 
 async def _run_tbank_polling_loop(adapter, aggregator: CandleAggregator, publisher: MarketPublisher, state: WorkerRuntimeState, tf_str: str) -> None:
@@ -599,6 +750,9 @@ async def _run_analysis_loop(
                     logger.debug("Instrument skipped: %s history too short (%d < %d)", ticker, len(history), new_strategy.lookback)
                     continue
                 processed += 1
+                async with state.lock:
+                    state.status["last_processed_instrument"] = ticker
+                    state.status["last_processed_ts"] = _now_ms()
                 if processor.strategy.name != new_strategy.name:
                     logger.info("Strategy hot-swapped: %s → %s", processor.strategy.name, new_strategy.name)
                     processor.strategy = new_strategy
@@ -739,6 +893,12 @@ async def run_worker() -> None:
         json_format=(config.APP_ENV == "production"),
         log_dir=(config.LOG_DIR or os.getenv("LOG_DIR") or None),
     )
+    try:
+        _acquire_single_instance_lock()
+        atexit.register(_release_single_instance_lock)
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        return
     logger.info("Worker starting (env=%s tf=%s broker=%s)", config.APP_ENV, os.getenv("TF", "1m"), config.BROKER_PROVIDER)
     _sanitize_proxy_env()
 
@@ -748,8 +908,10 @@ async def run_worker() -> None:
 
     tf_str = os.getenv("TF", "1m")
     frame_sec = {"1m": 60, "5m": 300, "15m": 900}.get(tf_str, 60)
+    history_size = max(200, int(os.getenv("WORKER_HISTORY_SIZE", "600") or "600")) if tf_str == '1m' else max(200, int(os.getenv("WORKER_HISTORY_SIZE", "200") or "200"))
     tickers = await _load_watchlist()
     logger.info("Watchlist loaded: %d instrument(s): %s", len(tickers), tickers)
+    logger.info("Worker history retention configured: tf=%s history_size=%d", tf_str, history_size)
 
     selector = StrategySelector()
     with SessionLocal() as init_db:
@@ -770,7 +932,7 @@ async def run_worker() -> None:
             )
 
     strategy = selector.get(strategy_name)
-    aggregator = CandleAggregator(frame_sec=frame_sec)
+    aggregator = CandleAggregator(frame_sec=frame_sec, history_size=history_size)
     publisher = MarketPublisher(tf_str=tf_str)
     internet = InternetCollector(redis_client=bus.redis, news_ttl=config.NEWS_CACHE_TTL_SEC, macro_ttl=config.MACRO_CACHE_TTL_SEC)
     processor = SignalProcessor(strategy=strategy, internet_collector=internet, aggregator=aggregator)
@@ -783,11 +945,19 @@ async def run_worker() -> None:
     )
     await state.set_phase("bootstrap", f"Worker bootstrapping {len(tickers)} instrument(s)")
     await state.publish()
+    status_task = asyncio.create_task(_run_status_heartbeat_loop(state), name="worker-status-heartbeat")
 
     runtime_tbank_token = get_token("TBANK_TOKEN") or config.TBANK_TOKEN
     runtime_tbank_account = get_token("TBANK_ACCOUNT_ID") or config.TBANK_ACCOUNT_ID
     adapter = None
     polling_task = None
+    profile_bootstrap_task = None
+
+    def instrument_adapter_factory():
+        if config.BROKER_PROVIDER != 'tbank' or not runtime_tbank_token:
+            return None
+        from apps.broker.tbank import TBankGrpcAdapter
+        return TBankGrpcAdapter(token=runtime_tbank_token, account_id=runtime_tbank_account, sandbox=config.TBANK_SANDBOX)
 
     if config.BROKER_PROVIDER == "tbank" and runtime_tbank_token:
         from apps.broker.tbank import TBankGrpcAdapter
@@ -799,41 +969,32 @@ async def run_worker() -> None:
         )
         if settings and bool(getattr(settings, "use_broker_trading_schedule", True)):
             await refresh_trading_schedule(exchange=(getattr(settings, "trading_schedule_exchange", None) or None), force=True)
-        primed = await _load_cached_history(aggregator, tickers, tf_str)
+        await _load_cached_history(aggregator, tickers, tf_str)
         bootstrap_limit = max(1, int(getattr(settings, "worker_bootstrap_limit", 0) or os.getenv("WORKER_BOOTSTRAP_LIMIT", "10") or "10"))
-        await _bootstrap_history(adapter, aggregator, tickers[:bootstrap_limit], tf_str, skip_tickers=primed)
-        with SessionLocal() as db:
-            ensure_result = ensure_symbol_profiles(
-                db,
-                tickers,
-                auto_train=True,
-                lookback_days=180,
-                timeframe=tf_str,
-                train_limit=bootstrap_limit,
-                source='worker_startup',
-            )
-        await state.set_phase('bootstrap', f"Profiles ensured for {len(tickers)} instrument(s)", symbol_profiles_bootstrap=ensure_result)
+        await _bootstrap_history(adapter, aggregator, tickers[:bootstrap_limit], tf_str)
+        await state.set_phase('bootstrap', f"History primed for {bootstrap_limit} instrument(s)")
+        await state.publish()
         polling_task = asyncio.create_task(_run_tbank_polling_loop(adapter, aggregator, publisher, state, tf_str), name="worker-polling")
+        profile_bootstrap_task = asyncio.create_task(
+            _run_symbol_profile_bootstrap_task(state, tickers, train_limit=bootstrap_limit, timeframe=tf_str, source='worker_startup'),
+            name='worker-symbol-profile-bootstrap',
+        )
     else:
         primed = await _load_cached_history(aggregator, tickers, tf_str)
         logger.info("Mock mode history bootstrap: primed=%d", len(primed))
-        with SessionLocal() as db:
-            ensure_result = ensure_symbol_profiles(
-                db,
-                tickers,
-                auto_train=True,
-                lookback_days=180,
-                timeframe=tf_str,
-                train_limit=max(1, min(len(tickers), int(getattr(settings, "worker_bootstrap_limit", 0) or os.getenv("WORKER_BOOTSTRAP_LIMIT", "10") or "10"))),
-                source='worker_startup_mock',
-            )
-        await state.set_phase('bootstrap', f"Profiles ensured for {len(tickers)} instrument(s)", symbol_profiles_bootstrap=ensure_result)
+        train_limit = max(1, min(len(tickers), int(getattr(settings, "worker_bootstrap_limit", 0) or os.getenv("WORKER_BOOTSTRAP_LIMIT", "10") or "10")))
+        await state.set_phase('bootstrap', f"History primed for {len(primed)} instrument(s)")
+        await state.publish()
         polling_task = asyncio.create_task(_run_mock_polling_loop(aggregator, publisher, state, tf_str), name="worker-mock-polling")
+        profile_bootstrap_task = asyncio.create_task(
+            _run_symbol_profile_bootstrap_task(state, tickers, train_limit=train_limit, timeframe=tf_str, source='worker_startup_mock'),
+            name='worker-symbol-profile-bootstrap',
+        )
 
     watchlist_task = asyncio.create_task(_refresh_watchlist_loop(state, adapter, aggregator, tf_str), name="worker-watchlist")
     recalibration_task = asyncio.create_task(_run_recalibration_loop(state), name="worker-recalibration")
     ml_training_task = asyncio.create_task(_run_ml_training_loop(state), name="worker-ml-training")
-    status_task = asyncio.create_task(_run_status_heartbeat_loop(state), name="worker-status-heartbeat")
+    instrument_sync_task = asyncio.create_task(_run_instrument_auto_sync_loop(state, instrument_adapter_factory), name="worker-instrument-auto-sync")
     analysis_task = asyncio.create_task(
         _run_analysis_loop(
             selector=selector,
@@ -855,7 +1016,9 @@ async def run_worker() -> None:
     await state.set_phase("running", f"Worker running with {len(tickers)} instrument(s)")
     await state.publish()
 
-    tasks = [polling_task, analysis_task, watchlist_task, recalibration_task, ml_training_task, status_task, command_task]
+    tasks = [polling_task, analysis_task, watchlist_task, recalibration_task, ml_training_task, instrument_sync_task, status_task, command_task]
+    if profile_bootstrap_task is not None:
+        tasks.append(profile_bootstrap_task)
     try:
         while not _shutdown.is_set():
             await asyncio.sleep(1.0)
@@ -869,6 +1032,9 @@ async def run_worker() -> None:
                     await state.mark_error(task.get_name(), exc)
                     await state.publish()
                     raise exc
+                if _is_optional_worker_task(task.get_name()):
+                    logger.info("Worker optional task %s finished normally", task.get_name())
+                    continue
                 raise RuntimeError(f"Worker task {task.get_name()} stopped unexpectedly")
     except Exception as exc:
         logger.error("Worker loop error: %s", exc, exc_info=True)
@@ -922,7 +1088,7 @@ async def _command_listener(pubsub, runtime_tbank_token: str | None, runtime_tba
                             logger.warning("Execution skipped because bot is disabled")
                         else:
                             trade_mode = getattr(settings, "trade_mode", "review") or "review"
-                            if trade_mode == "auto_live":
+                            if trade_mode == "auto_live" and not prefers_paper_execution(settings):
                                 await TBankExecutionEngine(db, token=runtime_tbank_token, account_id=runtime_tbank_account, sandbox=config.TBANK_SANDBOX).execute_approved_signal(sig_id)
                             else:
                                 await PaperExecutionEngine(db).execute_approved_signal(sig_id)

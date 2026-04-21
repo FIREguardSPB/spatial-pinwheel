@@ -37,7 +37,14 @@ def _cached_payload(key: str, ttl_sec: float, builder):
         cached = _UI_CACHE.get(key)
         if cached and float(cached.get('expires_at') or 0) > now:
             return cached['value']
-    value = builder()
+    try:
+        value = builder()
+    except Exception:
+        with _UI_CACHE_LOCK:
+            cached = _UI_CACHE.get(key)
+            if cached and cached.get('value') is not None:
+                return cached['value']
+        raise
     with _UI_CACHE_LOCK:
         _UI_CACHE[key] = {
             'expires_at': now + max(1.0, float(ttl_sec or 1.0)),
@@ -124,10 +131,12 @@ def _runtime_bundle_sync(db: Session) -> dict[str, Any]:
         snap = build_settings_runtime_snapshot(db)
         settings_payload = settings_router._settings_to_schema(snap['settings'])
         return {
+            'settings_runtime': snap,
             'bot_status': snap['bot_status'],
             'settings': settings_payload.model_dump() if hasattr(settings_payload, 'model_dump') else settings_payload.dict(),
             'schedule': snap['schedule'],
             'watchlist': snap['watchlist'],
+            'watchlist_sector_distribution': snap['watchlist_sector_distribution'],
             'ai_runtime': snap['ai_runtime'],
             'telegram': snap['telegram'],
             'auto_policy': snap['auto_policy'],

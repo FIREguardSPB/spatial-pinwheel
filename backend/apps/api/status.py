@@ -6,9 +6,17 @@ import sqlalchemy
 from sqlalchemy.orm import Session
 
 from core.config import settings as config
+from core.services.cognitive_layer import build_cognitive_runtime_summary
+from core.execution.anomaly_breaker import evaluate_execution_anomaly_breaker
+from core.execution.controls import get_execution_control_snapshot
+from core.services.data_edge_runtime import build_data_edge_runtime_summary
+from core.services.performance_governor import build_governor_review_runtime_summary, build_slice_review_runtime_summary
+from core.services.research_runtime import build_research_runtime_summary
 from core.services.trading_schedule import get_schedule_snapshot
+from core.services.trade_management_runtime import build_trade_management_runtime_summary
 from core.storage.repos import settings as settings_repo
 from core.services.runtime_tokens import load_runtime_tokens
+from core.services.worker_status import read_worker_status
 
 CANONICAL_TRADE_MODES = {"review", "auto_paper", "auto_live"}
 LEGACY_TRADE_MODE_MAP = {
@@ -55,6 +63,14 @@ def build_bot_status_sync(db: Session) -> dict[str, Any]:
     bot_enabled = bool(getattr(settings, "bot_enabled", False)) if settings else False
 
     effective_provider, has_tbank, auto_live_available = _runtime_transport(settings, token_map)
+    execution_controls = get_execution_control_snapshot(settings)
+    execution_breaker = evaluate_execution_anomaly_breaker(db, settings)
+    trade_management = build_trade_management_runtime_summary(db, 24)
+    governor_review_calibration = build_governor_review_runtime_summary(db, settings=settings)
+    slice_review_calibration = build_slice_review_runtime_summary(db, settings=settings)
+    data_edge = build_data_edge_runtime_summary(db, settings)
+    cognitive_layer = build_cognitive_runtime_summary(db)
+    research_platform = build_research_runtime_summary(db, settings)
     broker_ok = effective_provider == "paper" or has_tbank
     market_data = "connected" if broker_ok else "disconnected"
     broker = "connected" if broker_ok else "disconnected"
@@ -80,6 +96,22 @@ def build_bot_status_sync(db: Session) -> dict[str, Any]:
         )
     if trade_mode == "auto_live" and not auto_live_available:
         warnings.append("Текущий режим auto_live недоступен по конфигурации и должен быть отключён.")
+    if execution_controls.get('blocks_new_entries'):
+        warnings.append('Новые входы заблокированы operator execution controls.')
+    if execution_controls.get('prefers_paper'):
+        warnings.append('Execution принудительно уходит в paper fallback/degraded mode.')
+    if execution_breaker.get('action') in {'triggered', 'already_active'} or execution_breaker.get('controls', {}).get('broker_degraded_mode'):
+        warnings.append('Execution anomaly breaker активен: новые live entries ограничены до стабилизации исполнения.')
+    if governor_review_calibration.get('status') == 'calibrate':
+        warnings.append('Review-driven calibration hints active: проверь governor review calibration и trade-management drift.')
+    if slice_review_calibration.get('status') == 'calibrate':
+        warnings.append('Slice-specific calibration hints active: есть адресные проблемы по strategy/regime slices.')
+    if (data_edge.get('market_data') or {}).get('freshness') == 'stale':
+        warnings.append('Market data freshness is stale: проверь ingest/polling cadence и feed health.')
+    if sum((cognitive_layer.get('contradiction_breakdown') or {}).values()) >= 3:
+        warnings.append('Cognitive contradictions accumulating: проверь thesis/scenario alignment on recent signals.')
+    if (research_platform.get('challenger_registry') or {}).get('candidate_slices_count', 0) >= 1:
+        warnings.append('Research challenger candidates available: можно сравнивать baseline vs challenger по slices.')
 
     try:
         db.execute(sqlalchemy.text("SELECT 1"))
@@ -93,8 +125,20 @@ def build_bot_status_sync(db: Session) -> dict[str, Any]:
     if schedule.get('is_trading_day') is False:
         warnings.append('Сегодня нет торгов по календарю брокера.')
 
+    worker_status: dict[str, Any] | None = None
+    try:
+        import asyncio
+
+        worker_status = asyncio.run(read_worker_status())
+    except Exception:
+        worker_status = None
+
+    worker_ok = bool(worker_status.get('ok')) if isinstance(worker_status, dict) else True
+    if bot_enabled and not worker_ok:
+        warnings.append('Worker heartbeat is unavailable: бот помечен как запущенный в настройках, но воркер сейчас offline.')
+
     return {
-        "is_running": bot_enabled,
+        "is_running": bool(bot_enabled and worker_ok),
         "mode": trade_mode,
         "is_paper": effective_provider != "tbank",
         "active_instrument_id": active_instrument_id,
@@ -118,6 +162,14 @@ def build_bot_status_sync(db: Session) -> dict[str, Any]:
             "auto_paper": True,
             "auto_live": auto_live_available,
         },
+        "execution_controls": execution_controls,
+        "execution_anomaly_breaker": execution_breaker,
+        "trade_management": trade_management,
+        "governor_review_calibration": governor_review_calibration,
+        "slice_review_calibration": slice_review_calibration,
+        "data_edge": data_edge,
+        "cognitive_layer": cognitive_layer,
+        "research_platform": research_platform,
         "warnings": warnings,
     }
 
