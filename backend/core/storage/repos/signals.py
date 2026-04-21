@@ -179,12 +179,35 @@ def _regime_aware_learning_bias(db: Session, signal: Signal, *, lookback_hours: 
     return bonus
 
 
+def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
+    return (
+        _execution_feedback_bonus(db, signal)
+        + _outcome_feedback_bonus(db, signal)
+        + _symbol_thesis_learning_bias(db, signal)
+        + _regime_aware_learning_bias(db, signal)
+    )
+
+
+def _apply_confidence_shaping(db: Session, signal: Signal) -> None:
+    meta = dict(getattr(signal, 'meta', None) or {})
+    review = dict(meta.get('review_readiness') or {})
+    if not review:
+        return
+    bias = int(_confidence_shaping_bias(db, signal))
+    review['confidence_bias'] = bias
+    review['confidence_multiplier'] = round(max(0.8, min(1.35, 1.0 + (bias / 100.0))), 2)
+    meta['review_readiness'] = review
+    signal.meta = meta
+
+
 def list_signals(db: Session, limit: int = 50, status: str = None) -> List[Signal]:
     query = db.query(Signal)
     if status:
         query = query.filter(Signal.status == status)
     rows = query.order_by(Signal.created_ts.desc(), Signal.ts.desc()).limit(limit).all()
     if status == 'pending_review':
+        for row in rows:
+            _apply_confidence_shaping(db, row)
         return sorted(rows, key=_pending_review_priority, reverse=True)
     return rows
 
@@ -203,8 +226,8 @@ def get_top_pending_review_candidate(db: Session, *, ttl_sec: int = 900) -> Opti
         if bool(review.get('approval_candidate')):
             approval_rows.append(row)
     if approval_rows:
-        return max(approval_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row) + _outcome_feedback_bonus(db, row) + _symbol_thesis_learning_bias(db, row) + _regime_aware_learning_bias(db, row)))
-    return max(fresh_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row) + _outcome_feedback_bonus(db, row) + _symbol_thesis_learning_bias(db, row) + _regime_aware_learning_bias(db, row)))
+        return max(approval_rows, key=lambda row: (_pending_review_priority(row), _confidence_shaping_bias(db, row)))
+    return max(fresh_rows, key=lambda row: (_pending_review_priority(row), _confidence_shaping_bias(db, row)))
 
 
 def get_signal(db: Session, signal_id: str) -> Optional[Signal]:

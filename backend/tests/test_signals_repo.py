@@ -119,6 +119,18 @@ def test_get_top_pending_review_candidate_uses_regime_aware_learning_bias(monkey
     assert top is candidate_b
 
 
+def test_apply_confidence_shaping_writes_multiplier_into_review_readiness(monkeypatch):
+    signal = SimpleNamespace(meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99}})
+
+    monkeypatch.setattr(signals_repo, '_confidence_shaping_bias', lambda db, signal: 20)
+
+    signals_repo._apply_confidence_shaping(object(), signal)
+
+    review = signal.meta['review_readiness']
+    assert review['confidence_bias'] == 20
+    assert review['confidence_multiplier'] > 1.0
+
+
 def test_replace_weaker_pending_signal_replaces_lower_priority(monkeypatch):
     weaker = SimpleNamespace(status='pending_review', meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 80}})
     stronger = SimpleNamespace(status='pending_review', meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 100}})
