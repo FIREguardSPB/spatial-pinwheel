@@ -64,6 +64,7 @@ from apps.worker.processor_support import (
     _build_signal_pipeline_payload,
     _apply_geometry_pass,
     _build_candles_summary,
+    _build_review_readiness_seed,
     _evaluate_selective_policy_throttle,
     _promote_high_conviction_skip,
     _candidate_timeframes,
@@ -431,6 +432,9 @@ class SignalProcessor:
         ticker = context["ticker"]
         sig_data = context["sig_data"]
         trace_id = context["trace_id"]
+        meta = dict(sig_data.get('meta') or {})
+        meta.setdefault('review_readiness', _build_review_readiness_seed(sig_data))
+        sig_data['meta'] = meta
         # 5. Persist signal
         try:
             signal_orm = signal_repo.create_signal(db, sig_data, commit=False)

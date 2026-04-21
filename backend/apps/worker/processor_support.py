@@ -120,6 +120,21 @@ def _build_pre_persist_candidate_payload(*, ticker: str, sig_data: dict, strateg
     }
 
 
+def _build_review_readiness_seed(sig_data: dict) -> dict:
+    meta = dict((sig_data or {}).get('meta') or {})
+    thesis = dict(meta.get('higher_tf_thesis') or {}) if isinstance(meta.get('higher_tf_thesis'), dict) else {}
+    return {
+        'selection_reason': meta.get('timeframe_selection_reason'),
+        'thesis_timeframe': meta.get('thesis_timeframe'),
+        'execution_timeframe': meta.get('execution_timeframe'),
+        'strategy_name': meta.get('strategy_name') or meta.get('strategy'),
+        'initial_rr': float((sig_data or {}).get('r') or 0.0),
+        'thesis_type': thesis.get('thesis_type'),
+        'structure': thesis.get('structure'),
+        'side': thesis.get('side') or (sig_data or {}).get('side'),
+    }
+
+
 def _evaluate_selective_policy_throttle(*, policy_state: Any, final_decision: str, score: int, threshold: int, sig_data: dict, perf_governor: dict, freshness_meta: dict) -> tuple[bool, str]:
     if not bool(getattr(policy_state, 'selective_throttle', False)):
         return False, ''

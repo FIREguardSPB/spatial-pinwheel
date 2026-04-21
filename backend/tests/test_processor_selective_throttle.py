@@ -1,10 +1,33 @@
 import unittest
 from types import SimpleNamespace
 
-from apps.worker.processor_support import _build_conviction_profile, _evaluate_selective_policy_throttle, _promote_high_conviction_skip
+from apps.worker.processor_support import _build_conviction_profile, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip
 
 
 class ProcessorSelectiveThrottleTests(unittest.TestCase):
+    def test_review_readiness_seed_preserves_higher_tf_context(self):
+        seed = _build_review_readiness_seed({
+            'side': 'SELL',
+            'entry': 100.0,
+            'r': 1.8,
+            'meta': {
+                'strategy_name': 'breakout',
+                'thesis_timeframe': '15m',
+                'timeframe_selection_reason': 'requested',
+                'higher_tf_thesis': {
+                    'thesis_timeframe': '15m',
+                    'thesis_type': 'continuation',
+                    'structure': 'near_low_break_continuation',
+                    'side': 'SELL',
+                },
+            },
+        })
+        self.assertEqual(seed['thesis_timeframe'], '15m')
+        self.assertEqual(seed['selection_reason'], 'requested')
+        self.assertEqual(seed['thesis_type'], 'continuation')
+        self.assertEqual(seed['structure'], 'near_low_break_continuation')
+        self.assertEqual(seed['initial_rr'], 1.8)
+
     def test_blocks_non_take_candidates_in_frozen_mode(self):
         blocked, reason = _evaluate_selective_policy_throttle(
             policy_state=SimpleNamespace(selective_throttle=True, selective_min_score_buffer=2, selective_min_rr=1.5, selective_require_governor_pass=True),
