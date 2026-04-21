@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from core.storage.models import Signal
+from core.storage.models import DecisionLog, Signal
 
 
 def _pending_review_priority(signal: Signal) -> tuple[int, int, int, int]:
@@ -14,6 +14,36 @@ def _pending_review_priority(signal: Signal) -> tuple[int, int, int, int]:
     created_ts = int(getattr(signal, 'created_ts', 0) or 0)
     ts = int(getattr(signal, 'ts', 0) or 0)
     return (approval, queue_priority, created_ts, ts)
+
+
+def _execution_feedback_bonus(db: Session, signal: Signal, *, lookback_hours: int = 24) -> int:
+    meta = dict(getattr(signal, 'meta', None) or {})
+    review = dict(meta.get('review_readiness') or {})
+    thesis_tf = str(review.get('thesis_timeframe') or '')
+    thesis_type = str(review.get('thesis_type') or '')
+    if not thesis_tf or not thesis_type:
+        return 0
+    cutoff = int(time.time() * 1000) - int(max(1, lookback_hours)) * 60 * 60 * 1000
+    rows = (
+        db.query(DecisionLog)
+        .filter(DecisionLog.ts >= cutoff, DecisionLog.type == 'trade_filled')
+        .all()
+    )
+    bonus = 0
+    for row in rows:
+        payload = dict(getattr(row, 'payload', None) or {})
+        seed = dict(payload.get('execution_quality_seed') or {})
+        if str(seed.get('thesis_timeframe') or '') != thesis_tf:
+            continue
+        seed_review = dict(seed.get('review_readiness') or {})
+        if str(seed_review.get('thesis_type') or '') != thesis_type:
+            continue
+        status = str(seed.get('fill_quality_status') or '')
+        if status == 'ok':
+            bonus += 15
+        elif status == 'anomaly':
+            bonus -= 10
+    return bonus
 
 
 def list_signals(db: Session, limit: int = 50, status: str = None) -> List[Signal]:
@@ -30,17 +60,18 @@ def get_top_pending_review_candidate(db: Session, *, ttl_sec: int = 900) -> Opti
     rows = list_signals(db, limit=50, status='pending_review')
     now_ms = int(time.time() * 1000)
     max_age_ms = max(1, int(ttl_sec)) * 1000
-    for row in rows:
-        if now_ms - int(getattr(row, 'ts', 0) or 0) > max_age_ms:
-            continue
+    fresh_rows = [row for row in rows if now_ms - int(getattr(row, 'ts', 0) or 0) <= max_age_ms]
+    if not fresh_rows:
+        return None
+    approval_rows = []
+    for row in fresh_rows:
         meta = dict(row.meta or {})
         review = dict(meta.get('review_readiness') or {})
         if bool(review.get('approval_candidate')):
-            return row
-    for row in rows:
-        if now_ms - int(getattr(row, 'ts', 0) or 0) <= max_age_ms:
-            return row
-    return None
+            approval_rows.append(row)
+    if approval_rows:
+        return max(approval_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row)))
+    return max(fresh_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row)))
 
 
 def get_signal(db: Session, signal_id: str) -> Optional[Signal]:
