@@ -180,12 +180,38 @@ def _regime_aware_learning_bias(db: Session, signal: Signal, *, lookback_hours: 
     return bonus
 
 
+def _instrument_fatigue_bias(db: Session, signal: Signal, *, lookback_hours: int = 6) -> int:
+    instrument_id = str(getattr(signal, 'instrument_id', '') or '')
+    if not instrument_id:
+        return 0
+    cutoff = int(time.time() * 1000) - int(max(1, lookback_hours)) * 60 * 60 * 1000
+    rows = (
+        db.query(DecisionLog)
+        .filter(DecisionLog.ts >= cutoff, DecisionLog.type.in_(['trade_filled', 'position_closed']))
+        .all()
+    )
+    touches = 0
+    negative = 0
+    for row in rows:
+        payload = dict(getattr(row, 'payload', None) or {})
+        if str(payload.get('instrument_id') or '') != instrument_id:
+            continue
+        touches += 1
+        if str(getattr(row, 'type', '') or '') == 'position_closed' and _safe_float(payload.get('net_pnl'), 0.0) <= 0:
+            negative += 1
+    if touches <= 2:
+        return 0
+    penalty = min(18, (touches - 2) * 4 + negative * 3)
+    return -penalty
+
+
 def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
     return (
         _execution_feedback_bonus(db, signal)
         + _outcome_feedback_bonus(db, signal)
         + _symbol_thesis_learning_bias(db, signal)
         + _regime_aware_learning_bias(db, signal)
+        + _instrument_fatigue_bias(db, signal)
     )
 
 

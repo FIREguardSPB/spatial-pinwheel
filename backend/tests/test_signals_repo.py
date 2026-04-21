@@ -85,6 +85,7 @@ def test_get_top_pending_review_candidate_uses_execution_feedback_bonus(monkeypa
     monkeypatch.setattr(signals_repo.time, 'time', lambda: 2_000_000 / 1000)
     monkeypatch.setattr(signals_repo, '_execution_feedback_bonus', lambda db, signal, lookback_hours=24: 15 if signal is candidate_b else 0)
     monkeypatch.setattr(signals_repo, '_outcome_feedback_bonus', lambda db, signal, lookback_hours=24: 0)
+    monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
 
     top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
 
@@ -99,6 +100,7 @@ def test_get_top_pending_review_candidate_uses_outcome_feedback_bonus(monkeypatc
     monkeypatch.setattr(signals_repo.time, 'time', lambda: 2_000_000 / 1000)
     monkeypatch.setattr(signals_repo, '_execution_feedback_bonus', lambda db, signal, lookback_hours=24: 0)
     monkeypatch.setattr(signals_repo, '_outcome_feedback_bonus', lambda db, signal, lookback_hours=24: 12 if signal is candidate_b else 0)
+    monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
 
     top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
 
@@ -114,6 +116,7 @@ def test_get_top_pending_review_candidate_uses_symbol_thesis_learning_bias(monke
     monkeypatch.setattr(signals_repo, '_execution_feedback_bonus', lambda db, signal, lookback_hours=24: 0)
     monkeypatch.setattr(signals_repo, '_outcome_feedback_bonus', lambda db, signal, lookback_hours=24: 0)
     monkeypatch.setattr(signals_repo, '_symbol_thesis_learning_bias', lambda db, signal, lookback_hours=24: 20 if signal is candidate_b else 0)
+    monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
 
     top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
 
@@ -130,10 +133,36 @@ def test_get_top_pending_review_candidate_uses_regime_aware_learning_bias(monkey
     monkeypatch.setattr(signals_repo, '_outcome_feedback_bonus', lambda db, signal, lookback_hours=24: 0)
     monkeypatch.setattr(signals_repo, '_symbol_thesis_learning_bias', lambda db, signal, lookback_hours=24: 0)
     monkeypatch.setattr(signals_repo, '_regime_aware_learning_bias', lambda db, signal, lookback_hours=24: 10 if signal is candidate_b else 0)
+    monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
 
     top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
 
     assert top is candidate_b
+
+
+def test_instrument_fatigue_bias_penalizes_recent_overtrading(monkeypatch):
+    rows = [
+        SimpleNamespace(type='trade_filled', payload={'instrument_id': 'TQBR:SBER'}),
+        SimpleNamespace(type='trade_filled', payload={'instrument_id': 'TQBR:SBER'}),
+        SimpleNamespace(type='position_closed', payload={'instrument_id': 'TQBR:SBER', 'net_pnl': -1.0}),
+        SimpleNamespace(type='position_closed', payload={'instrument_id': 'TQBR:SBER', 'net_pnl': 1.0}),
+    ]
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+        def all(self):
+            return rows
+
+    class _DB:
+        def query(self, _model):
+            return _Query()
+
+    monkeypatch.setattr(signals_repo.time, 'time', lambda: 2_000_000 / 1000)
+
+    bias = signals_repo._instrument_fatigue_bias(_DB(), SimpleNamespace(instrument_id='TQBR:SBER'), lookback_hours=6)
+
+    assert bias < 0
 
 
 def test_apply_confidence_shaping_writes_multiplier_into_review_readiness(monkeypatch):
