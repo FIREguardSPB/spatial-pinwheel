@@ -1365,9 +1365,43 @@ class SignalProcessor:
             }
 
         stage_started = time.perf_counter()
-        context = await self._run_decision_flow(db, context)
+        decision_context = context
+        try:
+            context = await self._run_decision_flow(db, context)
+        except Exception as exc:
+            logger.error("%s: decision flow crashed after persist: %s", decision_context.get('ticker'), exc, exc_info=True)
+            signal_orm = decision_context.get('signal_orm')
+            if signal_orm is not None:
+                failed_meta = dict(signal_orm.meta or {})
+                failed_meta['decision_flow_error'] = {
+                    'stage': 'run_decision_flow',
+                    'reason': f'{type(exc).__name__}: {exc}',
+                }
+                signal_orm.status = 'rejected'
+                signal_orm.meta = failed_meta
+                db.commit()
+                db.refresh(signal_orm)
+            telemetry['decision_flow_total_ms'] = _elapsed_ms(stage_started)
+            telemetry['total_ms'] = _elapsed_ms(total_started)
+            return {
+                'ok': False,
+                'created_signal': True,
+                'outcome': 'decision_flow_exception',
+                'telemetry': telemetry,
+            }
         telemetry['decision_flow_total_ms'] = _elapsed_ms(stage_started)
         if context is None:
+            signal_orm = decision_context.get('signal_orm')
+            if signal_orm is not None:
+                failed_meta = dict(signal_orm.meta or {})
+                failed_meta.setdefault('decision_flow_error', {
+                    'stage': 'run_decision_flow',
+                    'reason': 'returned_none',
+                })
+                signal_orm.status = 'rejected'
+                signal_orm.meta = failed_meta
+                db.commit()
+                db.refresh(signal_orm)
             telemetry['total_ms'] = _elapsed_ms(total_started)
             return {
                 'ok': False,
