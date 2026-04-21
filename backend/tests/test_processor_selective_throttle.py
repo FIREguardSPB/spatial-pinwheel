@@ -429,6 +429,7 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         self.assertEqual(profile['tier'], 'B')
         self.assertEqual(profile['confidence_bias'], 20)
         self.assertTrue(profile['rescue_eligible'])
+        self.assertGreater(profile['allocator_priority_bonus'], 1.0)
 
     def test_conviction_profile_rejects_non_tradeable_cost_structure(self):
         profile = _build_conviction_profile(

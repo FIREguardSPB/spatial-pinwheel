@@ -338,6 +338,9 @@ def _build_conviction_profile(*, final_decision: str, score: int, threshold: int
     tradable = tier in {'A+', 'A', 'B'}
     decision_upper = str(final_decision or '').upper()
     rescue_eligible = decision_upper in {'SKIP', 'REJECT'} and tradable
+    allocator_priority_bonus = 1.15 if tier == 'A+' else (1.08 if tier == 'A' else 1.0)
+    if confidence_bias > 0 and tradable:
+        allocator_priority_bonus = round(min(1.25, allocator_priority_bonus + min(confidence_bias / 100.0, 0.15)), 4)
     return {
         'tier': tier,
         'tradable': tradable,
@@ -353,7 +356,7 @@ def _build_conviction_profile(*, final_decision: str, score: int, threshold: int
         'has_blockers': block_present,
         'frozen_score_buffer_override': frozen_score_buffer_override,
         'frozen_rr_override': frozen_rr_override,
-        'allocator_priority_bonus': 1.15 if tier == 'A+' else (1.08 if tier == 'A' else 1.0),
+        'allocator_priority_bonus': allocator_priority_bonus,
         'risk_tier_bias': 1.05 if tier == 'A+' else (1.02 if tier == 'A' else (0.97 if tier == 'C' else 1.0)),
         'confidence_bias': confidence_bias,
     }
