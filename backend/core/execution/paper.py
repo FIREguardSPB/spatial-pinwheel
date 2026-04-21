@@ -9,6 +9,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from core.events.bus import bus
+from core.execution.controls import ExecutionControlBlocked, assert_new_entries_allowed
+from core.execution.fill_quality import build_fill_quality
+from core.execution.idempotent_submit import signal_client_order_id
+from core.execution.order_lifecycle import OrderLifecycleManager, map_broker_execution_status
 from core.risk.manager import RiskManager
 from core.services.capital_allocator import CapitalAllocator
 from core.services.excursion_tracker import update_position_excursion
@@ -39,6 +43,17 @@ class PaperExecutionEngine:
     @staticmethod
     def _signal_meta(signal: Signal | None) -> dict[str, Any]:
         return dict(signal.meta or {}) if signal else {}
+
+    @staticmethod
+    def _execution_quality_seed(signal: Signal | None, fill_quality: dict[str, Any]) -> dict[str, Any]:
+        meta = dict(signal.meta or {}) if signal else {}
+        return {
+            'thesis_timeframe': meta.get('thesis_timeframe'),
+            'review_readiness': dict(meta.get('review_readiness') or {}),
+            'conviction_profile': dict(meta.get('conviction_profile') or {}),
+            'high_conviction_promotion': dict(meta.get('high_conviction_promotion') or {}),
+            'fill_quality_status': fill_quality.get('status'),
+        }
 
     @staticmethod
     def _signal_strategy(signal: Signal | None) -> str | None:
@@ -118,22 +133,25 @@ class PaperExecutionEngine:
         exit_fee = _fee_rub(current_price, close_qty, fees_bps)
         net_realized = gross_realized - exit_fee
         now_ms = int(time.time() * 1000)
-        order = Order(
+        lifecycle = OrderLifecycleManager(self.db)
+        order = lifecycle.create_order(
             order_id=new_prefixed_id('ord_realloc'),
             instrument_id=position.instrument_id,
-            ts=now_ms,
             side=close_side,
-            type='MARKET',
+            order_type='MARKET',
             price=Decimal(str(current_price)),
             qty=Decimal(str(close_qty)),
-            filled_qty=Decimal(str(close_qty)),
-            status='FILLED',
             related_signal_id=position.opened_signal_id,
             ai_influenced=False,
             ai_mode_used='reallocation',
             strategy=getattr(position, 'strategy', None),
             trace_id=trace_id or getattr(position, 'trace_id', None),
-        )
+            ts_ms=now_ms,
+            reason='partial_close_created',
+        ).order
+        lifecycle.transition(order, 'submitted', reason='paper_submit', created_at=now_ms + 1)
+        lifecycle.transition(order, 'acknowledged', reason='paper_ack', created_at=now_ms + 2)
+        lifecycle.transition(order, 'filled', reason='partial_fill_close', filled_qty=Decimal(str(close_qty)), created_at=now_ms + 3)
         trade = Trade(
             trade_id=new_prefixed_id('trd_realloc'),
             instrument_id=position.instrument_id,
@@ -190,8 +208,27 @@ class PaperExecutionEngine:
             return
 
         settings = settings_repo.get_settings(self.db)
-        risk_ok, risk_reason = self.risk.check_new_signal(signal)
         trace_id = self._signal_trace_id(signal)
+        try:
+            assert_new_entries_allowed(settings, execution_target='paper')
+        except ExecutionControlBlocked as exc:
+            signal.status = 'pending_review'
+            self.db.commit()
+            append_decision_log_best_effort(
+                log_type='execution_control_block',
+                message=f'Paper entry blocked for {signal.instrument_id}: {exc}',
+                payload={
+                    'signal_id': signal.id,
+                    'instrument_id': signal.instrument_id,
+                    'trace_id': trace_id,
+                    'code': exc.code,
+                    'controls': exc.snapshot,
+                    'execution_target': 'paper',
+                },
+            )
+            await bus.publish('signal_updated', {'id': signal_id, 'status': 'pending_review', 'reason': str(exc)})
+            return
+        risk_ok, risk_reason = self.risk.check_new_signal(signal)
         if not risk_ok:
             candidate, ratio, alloc_meta = self._eligible_partial_close_candidate(signal, settings)
             if candidate is not None:
@@ -207,6 +244,14 @@ class PaperExecutionEngine:
 
         if not risk_ok:
             logger.warning('Paper execution blocked by risk: %s', risk_reason)
+            meta = dict(signal.meta or {}) if isinstance(signal.meta, dict) else {}
+            meta['execution_stage_block'] = {
+                'code': 'execution_risk_block',
+                'reason': risk_reason,
+                'stage': 'paper_execution',
+                'risk_detail': self.risk.last_check_details,
+            }
+            signal.meta = meta
             signal.status = 'rejected'
             self.db.commit()
             append_decision_log_best_effort(
@@ -224,24 +269,39 @@ class PaperExecutionEngine:
         entry_fee = _fee_rub(fill_price, qty, fees_bps)
         now_ms = int(time.time() * 1000)
         strategy_name = self._signal_strategy(signal)
-
-        order = Order(
-            order_id=new_prefixed_id('ord'),
-            instrument_id=signal.instrument_id,
-            ts=now_ms,
+        fill_quality = build_fill_quality(
+            requested_price=float(signal.entry),
+            actual_price=float(fill_price),
             side=signal.side,
-            type='MARKET',
+            qty=qty,
+            expected_slippage_bps=slippage_bps,
+            end_to_end_ms=3,
+        )
+
+        lifecycle = OrderLifecycleManager(self.db)
+        create_result = lifecycle.create_order(
+            order_id=new_prefixed_id('ord'),
+            client_order_id=signal_client_order_id(signal.id, purpose='paper_open'),
+            instrument_id=signal.instrument_id,
+            side=signal.side,
+            order_type='MARKET',
             price=Decimal(str(fill_price)),
             qty=qty,
-            filled_qty=qty,
-            status='FILLED',
             related_signal_id=signal.id,
             ai_influenced=bool(signal.ai_influenced),
             ai_mode_used=signal.ai_mode_used or 'off',
             strategy=strategy_name,
             trace_id=trace_id,
+            ts_ms=now_ms,
+            reason='paper_order_created',
         )
-        self.db.add(order)
+        order = create_result.order
+        if not create_result.created:
+            logger.info('Duplicate paper submit suppressed for signal %s client_order_id=%s', signal.id, getattr(order, 'client_order_id', None))
+            return
+        lifecycle.transition(order, 'submitted', reason='paper_submit', created_at=now_ms + 1)
+        lifecycle.transition(order, 'acknowledged', reason='paper_ack', created_at=now_ms + 2)
+        lifecycle.transition(order, 'filled', reason='paper_fill', filled_qty=qty, created_at=now_ms + 3)
 
         trade = Trade(
             trade_id=new_prefixed_id('trd'),
@@ -340,6 +400,10 @@ class PaperExecutionEngine:
 
         update_position_excursion(self.db, position, float(fill_price), ts_ms=now_ms, phase='entry_fill')
         signal.status = 'executed'
+        signal_meta = dict(signal.meta or {})
+        signal_meta['fill_quality'] = fill_quality
+        signal_meta['execution_quality_seed'] = self._execution_quality_seed(signal, fill_quality)
+        signal.meta = signal_meta
         self.db.commit()
 
         strategy_meta = dict(signal.meta or {})
@@ -364,8 +428,33 @@ class PaperExecutionEngine:
                 'ai_mode_used': signal.ai_mode_used,
                 'strategy_name': strategy_name,
                 'decision_merge': strategy_meta.get('decision_merge'),
+                'fill_quality': fill_quality,
+                'execution_quality_seed': strategy_meta.get('execution_quality_seed'),
             },
         )
+        append_decision_log_best_effort(
+            log_type='fill_quality',
+            message=f'Fill quality for {signal.instrument_id}: {fill_quality["status"]}',
+            payload={
+                'signal_id': signal.id,
+                'trace_id': trace_id,
+                'instrument_id': signal.instrument_id,
+                'order_id': order.order_id,
+                'fill_quality': fill_quality,
+            },
+        )
+        if fill_quality['status'] == 'anomaly':
+            append_decision_log_best_effort(
+                log_type='execution_fill_anomaly',
+                message=f'Fill slippage anomaly for {signal.instrument_id}',
+                payload={
+                    'signal_id': signal.id,
+                    'trace_id': trace_id,
+                    'instrument_id': signal.instrument_id,
+                    'order_id': order.order_id,
+                    'fill_quality': fill_quality,
+                },
+            )
 
         logger.info(
             'Executed: %s %d @ %.4f sl=%.4f tp=%.4f entry_fee=%.2f strategy=%s',
