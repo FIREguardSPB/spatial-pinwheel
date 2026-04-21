@@ -185,6 +185,30 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         self.assertTrue(profile['rescue_eligible'])
         self.assertEqual(profile['allocator_priority_bonus'], 1.0)
 
+    def test_conviction_profile_marks_higher_tf_near_take_as_tradeable_b_tier(self):
+        profile = _build_conviction_profile(
+            final_decision='REJECT',
+            score=71,
+            threshold=80,
+            evaluation=SimpleNamespace(
+                reasons=[],
+                metrics={'economic_filter_valid': True, 'net_rr': 0.88, 'commission_dominance_ratio': 0.95},
+            ),
+            perf_governor={'suppressed': False},
+            freshness_meta={'blocked': False},
+            signal_meta={
+                'thesis_timeframe': '15m',
+                'higher_tf_thesis': {
+                    'thesis_timeframe': '15m',
+                    'thesis_type': 'timeframe_signal',
+                    'structure': 'requested_timeframe_signal',
+                    'side': 'BUY',
+                },
+            },
+        )
+        self.assertEqual(profile['tier'], 'B')
+        self.assertTrue(profile['rescue_eligible'])
+
     def test_conviction_profile_rejects_non_tradeable_cost_structure(self):
         profile = _build_conviction_profile(
             final_decision='SKIP',

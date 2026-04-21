@@ -763,6 +763,7 @@ class SignalProcessor:
             evaluation=evaluation,
             perf_governor=perf_governor,
             freshness_meta=freshness_meta,
+            signal_meta=sig_data.get('meta') or {},
         )
         sig_meta = dict(sig_data.get('meta') or {})
         sig_meta['conviction_profile'] = conviction_profile
