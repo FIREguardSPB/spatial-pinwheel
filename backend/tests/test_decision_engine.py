@@ -191,6 +191,46 @@ class TestDecisionEngine(unittest.TestCase):
 
         self.assertFalse(any(r.code == ReasonCode.NO_MARKET_DATA for r in res.reasons))
 
+    def test_requested_15m_signal_does_not_hard_fail_at_39_candles(self):
+        settings = Settings()
+        settings.decision_threshold = 40
+        settings.rr_min = 1.1
+        settings.atr_stop_hard_min = 0.1
+        settings.atr_stop_hard_max = 10.0
+        settings.atr_stop_soft_min = 0.1
+        settings.atr_stop_soft_max = 5.0
+        settings.fees_bps = 3
+        settings.slippage_bps = 5
+        settings.w_regime = 20
+        settings.w_volatility = 15
+        settings.w_momentum = 15
+        settings.w_levels = 20
+        settings.w_costs = 15
+        settings.w_liquidity = 5
+        settings.no_trade_opening_minutes = 0
+        settings.close_before_session_end_minutes = 0
+        settings.trading_session = 'all'
+
+        engine = DecisionEngine(settings)
+        sig = MockSignal(side='BUY', entry=100, sl=99, tp=103, size=10, r=2.0)
+        sig.meta = {'thesis_timeframe': '15m', 'higher_tf_thesis': {'thesis_timeframe': '15m', 'thesis_type': 'continuation'}}
+        candles = []
+        for i in range(39):
+            close = 100.0 + i * 0.12
+            candles.append({
+                'time': 1000 + i * 900,
+                'open': close - 0.08,
+                'high': close + 0.2,
+                'low': close - 0.2,
+                'close': close,
+                'volume': 1000,
+            })
+        snapshot = MarketSnapshot(candles=candles, last_price=Decimal('104.5'))
+
+        res = engine.evaluate(sig, snapshot)
+
+        self.assertFalse(any(r.code == ReasonCode.NO_MARKET_DATA for r in res.reasons))
+
     def test_score_normalization(self):
         # Test that score is normalized to 0-100 even if weights sum != 100
         settings = Settings()

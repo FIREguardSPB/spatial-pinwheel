@@ -114,7 +114,7 @@ class DecisionEngine:
         # ── 2. Data sufficiency ───────────────────────────────────────────────
         signal_meta = dict(getattr(signal, 'meta', {}) or {}) if hasattr(signal, 'meta') else {}
         thesis_timeframe = str(signal_meta.get('thesis_timeframe') or '1m')
-        min_candles = 40 if thesis_timeframe in {'5m', '15m', '30m', '1h'} else 50
+        min_candles = 38 if thesis_timeframe in {'15m', '30m', '1h'} else (40 if thesis_timeframe == '5m' else 50)
         metrics['min_candles_required'] = min_candles
         if len(snapshot.candles) < min_candles:
             reasons.append(Reason(
@@ -149,7 +149,9 @@ class DecisionEngine:
         volumes = [float(c.get("volume", 0))         for c in snapshot.candles]
 
         ema_period = 50
-        if thesis_timeframe in {'5m', '15m', '30m', '1h'} and len(closes) >= 40:
+        if thesis_timeframe in {'15m', '30m', '1h'} and len(closes) >= 38:
+            ema_period = 34
+        elif thesis_timeframe == '5m' and len(closes) >= 40:
             ema_period = 34
         metrics['ema_period_used'] = ema_period
         ema50      = indicators.calc_ema(closes, ema_period)
