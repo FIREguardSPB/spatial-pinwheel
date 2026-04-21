@@ -89,6 +89,7 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         }, trade_mode='auto_paper')
         self.assertTrue(seed['approval_candidate'])
         self.assertEqual(seed['approval_reason'], 'higher_tf_strong_pending_candidate')
+        self.assertGreaterEqual(seed['queue_priority'], 80)
 
     def test_pending_review_outcome_seed_keeps_review_only_when_not_strong_enough(self):
         seed = _build_pending_review_outcome_seed({
@@ -109,6 +110,7 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         }, trade_mode='auto_paper')
         self.assertFalse(seed['approval_candidate'])
         self.assertEqual(seed['approval_reason'], 'review_only_pending_candidate')
+        self.assertLess(seed['queue_priority'], 80)
 
     def test_reconcile_review_readiness_demotes_candidate_after_hard_blockers(self):
         reconciled = _reconcile_review_readiness(

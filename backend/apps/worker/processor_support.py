@@ -179,8 +179,25 @@ def _build_pending_review_outcome_seed(sig_data: dict, *, trade_mode: str) -> di
     thesis_tf = str(review.get('thesis_timeframe') or '1m')
     selection_reason = str(review.get('selection_reason') or '')
     approval_candidate = trade_mode == 'auto_paper' and thesis_tf in {'5m', '15m'} and selection_reason in {'requested', 'confirmation'} and initial_rr >= 2.0
+    queue_priority = 0
+    if thesis_tf == '15m':
+        queue_priority += 30
+    elif thesis_tf == '5m':
+        queue_priority += 20
+    if selection_reason == 'requested':
+        queue_priority += 20
+    elif selection_reason == 'confirmation':
+        queue_priority += 15
+    if review.get('thesis_type') == 'continuation':
+        queue_priority += 10
+    elif review.get('thesis_type') == 'timeframe_signal':
+        queue_priority += 8
+    queue_priority += min(int(initial_rr * 10), 30)
+    if approval_candidate:
+        queue_priority += 25
     return {
         **review,
+        'queue_priority': queue_priority,
         'approval_candidate': approval_candidate,
         'approval_reason': 'higher_tf_strong_pending_candidate' if approval_candidate else 'review_only_pending_candidate',
     }
