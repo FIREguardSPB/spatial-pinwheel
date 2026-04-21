@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -253,6 +254,36 @@ def _correlation_nudge(db: Session, signal: Signal) -> int:
     return -6
 
 
+def _session_phase(ts_ms: int) -> str:
+    dt = datetime.fromtimestamp(int(ts_ms or 0) / 1000, tz=timezone.utc)
+    minute = dt.hour * 60 + dt.minute
+    if minute < 7 * 60:
+        return 'overnight'
+    if minute < 11 * 60:
+        return 'early'
+    if minute < 15 * 60:
+        return 'midday'
+    if minute < 20 * 60:
+        return 'late'
+    return 'overnight'
+
+
+def _session_phase_bias(signal: Signal) -> int:
+    phase = _session_phase(getattr(signal, 'ts', 0) or 0)
+    meta = dict(getattr(signal, 'meta', None) or {})
+    review = dict(meta.get('review_readiness') or {})
+    thesis_tf = str(review.get('thesis_timeframe') or '')
+    selection_reason = str(review.get('selection_reason') or '')
+    if thesis_tf == '15m' and selection_reason in {'requested', 'confirmation'}:
+        if phase == 'midday':
+            return 6
+        if phase == 'late':
+            return -4
+    if thesis_tf == '5m' and phase == 'early':
+        return 4
+    return 0
+
+
 def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
     return (
         _execution_feedback_bonus(db, signal)
@@ -262,6 +293,7 @@ def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
         + _instrument_fatigue_bias(db, signal)
         + _diversification_bias(db, signal)
         + _correlation_nudge(db, signal)
+        + _session_phase_bias(signal)
     )
 
 

@@ -216,6 +216,22 @@ def test_correlation_nudge_penalizes_overlapping_active_ideas():
     assert bias < 0
 
 
+def test_session_phase_bias_prefers_midday_requested_15m():
+    signal = SimpleNamespace(
+        ts=1_767_000_000_000,
+        meta={'review_readiness': {'thesis_timeframe': '15m', 'selection_reason': 'requested'}},
+    )
+
+    original = signals_repo._session_phase
+    try:
+        signals_repo._session_phase = lambda _ts: 'midday'
+        bias = signals_repo._session_phase_bias(signal)
+    finally:
+        signals_repo._session_phase = original
+
+    assert bias > 0
+
+
 def test_apply_confidence_shaping_writes_multiplier_into_review_readiness(monkeypatch):
     signal = SimpleNamespace(meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99}})
 
