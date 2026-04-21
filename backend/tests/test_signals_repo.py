@@ -87,6 +87,7 @@ def test_get_top_pending_review_candidate_uses_execution_feedback_bonus(monkeypa
     monkeypatch.setattr(signals_repo, '_outcome_feedback_bonus', lambda db, signal, lookback_hours=24: 0)
     monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_diversification_bias', lambda db, signal: 0)
+    monkeypatch.setattr(signals_repo, '_correlation_nudge', lambda db, signal: 0)
 
     top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
 
@@ -103,6 +104,7 @@ def test_get_top_pending_review_candidate_uses_outcome_feedback_bonus(monkeypatc
     monkeypatch.setattr(signals_repo, '_outcome_feedback_bonus', lambda db, signal, lookback_hours=24: 12 if signal is candidate_b else 0)
     monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_diversification_bias', lambda db, signal: 0)
+    monkeypatch.setattr(signals_repo, '_correlation_nudge', lambda db, signal: 0)
 
     top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
 
@@ -120,6 +122,7 @@ def test_get_top_pending_review_candidate_uses_symbol_thesis_learning_bias(monke
     monkeypatch.setattr(signals_repo, '_symbol_thesis_learning_bias', lambda db, signal, lookback_hours=24: 20 if signal is candidate_b else 0)
     monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_diversification_bias', lambda db, signal: 0)
+    monkeypatch.setattr(signals_repo, '_correlation_nudge', lambda db, signal: 0)
 
     top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
 
@@ -138,6 +141,7 @@ def test_get_top_pending_review_candidate_uses_regime_aware_learning_bias(monkey
     monkeypatch.setattr(signals_repo, '_regime_aware_learning_bias', lambda db, signal, lookback_hours=24: 10 if signal is candidate_b else 0)
     monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_diversification_bias', lambda db, signal: 0)
+    monkeypatch.setattr(signals_repo, '_correlation_nudge', lambda db, signal: 0)
 
     top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
 
@@ -188,6 +192,28 @@ def test_diversification_bias_rewards_less_crowded_instrument():
     bias = signals_repo._diversification_bias(_DB(), SimpleNamespace(instrument_id='TQBR:LKOH'))
 
     assert bias > 0
+
+
+def test_correlation_nudge_penalizes_overlapping_active_ideas():
+    rows = [
+        SimpleNamespace(meta={'review_readiness': {'thesis_timeframe': '15m', 'thesis_type': 'continuation', 'side': 'BUY'}}, status='pending_review'),
+        SimpleNamespace(meta={'review_readiness': {'thesis_timeframe': '15m', 'thesis_type': 'continuation', 'side': 'BUY'}}, status='approved'),
+    ]
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+        def all(self):
+            return rows
+
+    class _DB:
+        def query(self, _model):
+            return _Query()
+
+    signal = SimpleNamespace(meta={'review_readiness': {'thesis_timeframe': '15m', 'thesis_type': 'continuation', 'side': 'BUY'}})
+    bias = signals_repo._correlation_nudge(_DB(), signal)
+
+    assert bias < 0
 
 
 def test_apply_confidence_shaping_writes_multiplier_into_review_readiness(monkeypatch):

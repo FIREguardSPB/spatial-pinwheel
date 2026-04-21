@@ -225,6 +225,34 @@ def _diversification_bias(db: Session, signal: Signal) -> int:
     return -6
 
 
+def _correlation_nudge(db: Session, signal: Signal) -> int:
+    meta = dict(getattr(signal, 'meta', None) or {})
+    review = dict(meta.get('review_readiness') or {})
+    thesis_tf = str(review.get('thesis_timeframe') or '')
+    thesis_type = str(review.get('thesis_type') or '')
+    side = str(review.get('side') or '')
+    if not thesis_tf or not thesis_type or not side:
+        return 0
+    active_rows = (
+        db.query(Signal)
+        .filter(Signal.status.in_(['pending_review', 'approved', 'executed']))
+        .all()
+    )
+    overlaps = 0
+    for row in active_rows:
+        if row is signal:
+            continue
+        row_meta = dict(getattr(row, 'meta', None) or {})
+        row_review = dict(row_meta.get('review_readiness') or {})
+        if str(row_review.get('thesis_timeframe') or '') == thesis_tf and str(row_review.get('thesis_type') or '') == thesis_type and str(row_review.get('side') or '') == side:
+            overlaps += 1
+    if overlaps == 0:
+        return 4
+    if overlaps == 1:
+        return 0
+    return -6
+
+
 def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
     return (
         _execution_feedback_bonus(db, signal)
@@ -233,6 +261,7 @@ def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
         + _regime_aware_learning_bias(db, signal)
         + _instrument_fatigue_bias(db, signal)
         + _diversification_bias(db, signal)
+        + _correlation_nudge(db, signal)
     )
 
 
