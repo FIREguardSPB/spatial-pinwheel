@@ -329,6 +329,8 @@ class DecisionEngine:
                 anomalous_ratio=anomalous_ratio,
                 extreme_ratio=extreme_ratio,
             )
+            if r.code == ReasonCode.VOLUME_LOW and r.severity == Severity.BLOCK and thesis_timeframe in {'15m', '30m', '1h'} and str(signal_meta.get('timeframe_selection_reason') or '') in {'requested', 'confirmation'}:
+                r = Reason(code=ReasonCode.VOLUME_LOW, severity=Severity.WARN, msg=f"{r.msg}; tolerated for higher-TF requested/confirmation setup")
             if r.severity == Severity.BLOCK:
                 reasons.append(r)
                 return self._finalize(Decision.REJECT, 0, 0, 0,

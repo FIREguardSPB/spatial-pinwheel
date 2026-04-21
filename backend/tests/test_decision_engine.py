@@ -1,7 +1,8 @@
 import unittest
 from decimal import Decimal
+from unittest.mock import patch
 from apps.worker.decision_engine import indicators, rules
-from apps.worker.decision_engine.types import ReasonCode
+from apps.worker.decision_engine.types import ReasonCode, Reason, Severity
 from apps.worker.decision_engine.engine import DecisionEngine
 from apps.worker.decision_engine.types import MarketSnapshot, Decision
 from core.storage.models import Settings
@@ -230,6 +231,40 @@ class TestDecisionEngine(unittest.TestCase):
         res = engine.evaluate(sig, snapshot)
 
         self.assertFalse(any(r.code == ReasonCode.NO_MARKET_DATA for r in res.reasons))
+
+    def test_requested_15m_signal_is_not_hard_rejected_only_for_low_volume(self):
+        settings = Settings()
+        settings.decision_threshold = 40
+        settings.rr_min = 1.1
+        settings.atr_stop_hard_min = 0.1
+        settings.atr_stop_hard_max = 10.0
+        settings.atr_stop_soft_min = 0.1
+        settings.atr_stop_soft_max = 5.0
+        settings.fees_bps = 3
+        settings.slippage_bps = 5
+        settings.w_regime = 20
+        settings.w_volatility = 15
+        settings.w_momentum = 15
+        settings.w_levels = 20
+        settings.w_costs = 15
+        settings.w_liquidity = 5
+        settings.no_trade_opening_minutes = 0
+        settings.close_before_session_end_minutes = 0
+        settings.trading_session = 'all'
+
+        engine = DecisionEngine(settings)
+        sig = MockSignal(side='SELL', entry=100, sl=101, tp=97, size=10, r=2.0)
+        sig.meta = {'thesis_timeframe': '15m', 'timeframe_selection_reason': 'requested', 'higher_tf_thesis': {'thesis_timeframe': '15m', 'thesis_type': 'continuation'}}
+        candles = []
+        for i in range(60):
+            close = 100.0 - i * 0.08
+            candles.append({'time': 1000 + i * 900, 'open': close + 0.05, 'high': close + 0.2, 'low': close - 0.2, 'close': close, 'volume': 1000})
+        snapshot = MarketSnapshot(candles=candles, last_price=Decimal('95.5'))
+
+        with patch('apps.worker.decision_engine.rules.score_volume', return_value=(0, Reason(code=ReasonCode.VOLUME_LOW, severity=Severity.BLOCK, msg='Volume too low'))):
+            res = engine.evaluate(sig, snapshot)
+
+        self.assertFalse(any(r.code == ReasonCode.VOLUME_LOW and r.severity == Severity.BLOCK for r in res.reasons))
 
     def test_score_normalization(self):
         # Test that score is normalized to 0-100 even if weights sum != 100
