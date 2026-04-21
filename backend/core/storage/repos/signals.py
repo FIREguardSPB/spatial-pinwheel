@@ -6,11 +6,24 @@ from sqlalchemy.orm import Session
 from core.storage.models import Signal
 
 
+def _pending_review_priority(signal: Signal) -> tuple[int, int, int, int]:
+    meta = dict(getattr(signal, 'meta', None) or {})
+    review = dict(meta.get('review_readiness') or {})
+    approval = 1 if bool(review.get('approval_candidate')) else 0
+    queue_priority = int(review.get('queue_priority') or 0)
+    created_ts = int(getattr(signal, 'created_ts', 0) or 0)
+    ts = int(getattr(signal, 'ts', 0) or 0)
+    return (approval, queue_priority, created_ts, ts)
+
+
 def list_signals(db: Session, limit: int = 50, status: str = None) -> List[Signal]:
     query = db.query(Signal)
     if status:
         query = query.filter(Signal.status == status)
-    return query.order_by(Signal.created_ts.desc(), Signal.ts.desc()).limit(limit).all()
+    rows = query.order_by(Signal.created_ts.desc(), Signal.ts.desc()).limit(limit).all()
+    if status == 'pending_review':
+        return sorted(rows, key=_pending_review_priority, reverse=True)
+    return rows
 
 
 def get_signal(db: Session, signal_id: str) -> Optional[Signal]:
