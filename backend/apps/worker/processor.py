@@ -423,9 +423,14 @@ class SignalProcessor:
         # 4. Check for existing pending signal
         pending_ttl_sec = int(getattr(settings, 'pending_review_ttl_sec', 900) or 900)
         max_pending_per_symbol = int(getattr(settings, 'max_pending_per_symbol', 1) or 1)
+        sig_meta = dict(sig_data.get('meta') or {})
+        sig_meta.setdefault('review_readiness', _build_pending_review_outcome_seed(sig_data, trade_mode=(getattr(settings, 'trade_mode', None) or 'review')))
+        sig_data['meta'] = sig_meta
         if signal_repo.count_pending_signals(db, ticker, ttl_sec=pending_ttl_sec, max_pending=max_pending_per_symbol) >= max_pending_per_symbol:
-            logger.debug("%s: already has active pending signal", ticker)
-            return None
+            incoming_priority = int(((sig_data.get('meta') or {}).get('review_readiness') or {}).get('queue_priority') or 0)
+            if not signal_repo.replace_weaker_pending_signal(db, ticker, incoming_priority=incoming_priority, ttl_sec=pending_ttl_sec):
+                logger.debug("%s: already has active pending signal", ticker)
+                return None
 
         context["sig_data"] = sig_data
         context["risk"] = risk

@@ -50,3 +50,28 @@ def test_get_top_pending_review_candidate_skips_stale_entries(monkeypatch):
     top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
 
     assert top is fresh
+
+
+def test_replace_weaker_pending_signal_replaces_lower_priority(monkeypatch):
+    weaker = SimpleNamespace(status='pending_review', meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 80}})
+    stronger = SimpleNamespace(status='pending_review', meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 100}})
+
+    class _Query:
+        def filter(self, *args, **kwargs):
+            return self
+        def all(self):
+            return [weaker, stronger]
+
+    class _DB:
+        def query(self, *args, **kwargs):
+            return _Query()
+        def commit(self):
+            pass
+
+    monkeypatch.setattr(signals_repo, 'expire_stale_pending_signals', lambda db, instrument_id, ttl_sec=900: 0)
+
+    replaced = signals_repo.replace_weaker_pending_signal(_DB(), 'TQBR:SBER', incoming_priority=120, ttl_sec=900)
+
+    assert replaced is True
+    assert weaker.status == 'expired'
+    assert weaker.meta['pending_replaced_by_stronger_candidate'] is True

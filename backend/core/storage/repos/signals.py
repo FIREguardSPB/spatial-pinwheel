@@ -121,6 +121,28 @@ def count_pending_signals(
     return min(count, int(max_pending))
 
 
+def replace_weaker_pending_signal(db: Session, instrument_id: str, *, incoming_priority: int, ttl_sec: int = 900) -> bool:
+    expire_stale_pending_signals(db, instrument_id, ttl_sec=ttl_sec)
+    rows = (
+        db.query(Signal)
+        .filter(Signal.instrument_id == instrument_id, Signal.status == 'pending_review')
+        .all()
+    )
+    if not rows:
+        return False
+    weakest = min(rows, key=_pending_review_priority)
+    weakest_priority = _pending_review_priority(weakest)[1]
+    if int(incoming_priority) <= int(weakest_priority):
+        return False
+    weakest.status = 'expired'
+    meta = dict(weakest.meta or {})
+    meta['pending_replaced_by_stronger_candidate'] = True
+    meta['pending_replacement_priority'] = int(incoming_priority)
+    weakest.meta = meta
+    db.commit()
+    return True
+
+
 
 def count_signals(db: Session, status: str = None) -> int:
     query = db.query(Signal)
