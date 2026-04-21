@@ -840,6 +840,10 @@ async def _run_analysis_loop(
                     snap_balance = float(getattr(snap_settings, "account_balance", 100_000) or 100_000)
                 if snap_settings and getattr(snap_settings, 'trade_mode', 'review') == 'auto_paper':
                     max_positions = int(getattr(snap_settings, 'max_concurrent_positions', 4) or 4)
+                    approved_signal = signal_repo.get_oldest_approved_signal(db)
+                    if approved_signal is not None:
+                        await PaperExecutionEngine(db).execute_approved_signal(approved_signal.id)
+                        open_pos = db.query(Position).filter(Position.qty > 0).count()
                     if open_pos < max_positions:
                         top_pending = signal_repo.get_top_pending_review_candidate(db, ttl_sec=int(getattr(snap_settings, 'pending_review_ttl_sec', 900) or 900))
                         if top_pending is not None:

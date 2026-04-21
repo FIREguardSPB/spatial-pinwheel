@@ -245,6 +245,30 @@ def test_throughput_preserving_bonus_protects_strong_higher_tf_candidate():
     assert bonus > 0
 
 
+def test_get_oldest_approved_signal_returns_oldest_row():
+    rows = [
+        SimpleNamespace(id='newer', status='approved', ts=200),
+        SimpleNamespace(id='older', status='approved', ts=100),
+    ]
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+        def order_by(self, *_args, **_kwargs):
+            self.rows = sorted(rows, key=lambda row: row.ts)
+            return self
+        def first(self):
+            return self.rows[0]
+
+    class _DB:
+        def query(self, _model):
+            return _Query()
+
+    row = signals_repo.get_oldest_approved_signal(_DB())
+
+    assert row.id == 'older'
+
+
 def test_apply_confidence_shaping_writes_multiplier_into_review_readiness(monkeypatch):
     signal = SimpleNamespace(meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99}})
 

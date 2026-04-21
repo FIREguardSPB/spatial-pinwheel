@@ -352,6 +352,15 @@ def get_top_pending_review_candidate(db: Session, *, ttl_sec: int = 900) -> Opti
     return max(fresh_rows, key=lambda row: (_pending_review_priority(row), _confidence_shaping_bias(db, row)))
 
 
+def get_oldest_approved_signal(db: Session) -> Optional[Signal]:
+    return (
+        db.query(Signal)
+        .filter(Signal.status == 'approved')
+        .order_by(Signal.ts.asc())
+        .first()
+    )
+
+
 def get_signal(db: Session, signal_id: str) -> Optional[Signal]:
     return db.query(Signal).filter(Signal.id == signal_id).first()
 
