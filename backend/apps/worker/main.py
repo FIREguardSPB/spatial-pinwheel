@@ -38,6 +38,7 @@ from core.sentiment.collector import SentimentCollector
 from core.services.worker_status import publish_worker_status
 from core.storage.models import AccountSnapshot, Position, Signal
 from core.storage.repos import candles as candle_repo
+from core.storage.repos import signals as signal_repo
 from core.storage.repos import settings as settings_repo
 from core.storage.session import SessionLocal
 from core.strategy.selector import StrategySelector
@@ -837,6 +838,15 @@ async def _run_analysis_loop(
                         snap_balance = float(getattr(snap_settings, "account_balance", 100_000) or 100_000)
                 else:
                     snap_balance = float(getattr(snap_settings, "account_balance", 100_000) or 100_000)
+                if snap_settings and getattr(snap_settings, 'trade_mode', 'review') == 'auto_paper':
+                    max_positions = int(getattr(snap_settings, 'max_concurrent_positions', 4) or 4)
+                    if open_pos < max_positions:
+                        top_pending = signal_repo.get_top_pending_review_candidate(db)
+                        if top_pending is not None:
+                            top_pending.status = 'approved'
+                            db.commit()
+                            await PaperExecutionEngine(db).execute_approved_signal(top_pending.id)
+                            open_pos += 1
                 from sqlalchemy import func
                 sod = start_of_day_ms()
                 realized_today = float(db.query(func.sum(Position.realized_pnl)).filter(Position.updated_ts >= sod).scalar() or 0.0)

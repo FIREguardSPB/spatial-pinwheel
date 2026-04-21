@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from core.storage.repos import signals as signals_repo
 from core.storage.repos.signals import _pending_review_priority
 
 
@@ -23,3 +24,14 @@ def test_pending_review_priority_prefers_approval_candidates_then_queue_priority
     ranked = sorted([weak, medium, strong], key=_pending_review_priority, reverse=True)
 
     assert ranked == [strong, medium, weak]
+
+
+def test_get_top_pending_review_candidate_prefers_approval_candidate(monkeypatch):
+    weak = SimpleNamespace(meta={'review_readiness': {'approval_candidate': False, 'queue_priority': 120}}, created_ts=400, ts=400)
+    strong = SimpleNamespace(meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99}}, created_ts=200, ts=200)
+
+    monkeypatch.setattr(signals_repo, 'list_signals', lambda db, limit=50, status=None: [weak, strong])
+
+    top = signals_repo.get_top_pending_review_candidate(object())
+
+    assert top is strong

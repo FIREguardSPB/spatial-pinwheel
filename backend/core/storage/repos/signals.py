@@ -26,6 +26,16 @@ def list_signals(db: Session, limit: int = 50, status: str = None) -> List[Signa
     return rows
 
 
+def get_top_pending_review_candidate(db: Session) -> Optional[Signal]:
+    rows = list_signals(db, limit=50, status='pending_review')
+    for row in rows:
+        meta = dict(row.meta or {})
+        review = dict(meta.get('review_readiness') or {})
+        if bool(review.get('approval_candidate')):
+            return row
+    return rows[0] if rows else None
+
+
 def get_signal(db: Session, signal_id: str) -> Optional[Signal]:
     return db.query(Signal).filter(Signal.id == signal_id).first()
 
