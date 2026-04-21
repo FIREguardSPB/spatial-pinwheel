@@ -22,8 +22,8 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         blocked, reason = _evaluate_selective_policy_throttle(
             policy_state=SimpleNamespace(selective_throttle=True, selective_min_score_buffer=2, selective_min_rr=1.5, selective_require_governor_pass=True),
             final_decision='REJECT',
-            score=69,
-            threshold=70,
+            score=71,
+            threshold=80,
             sig_data={
                 'r': 1.7,
                 'meta': {

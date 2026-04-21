@@ -129,12 +129,13 @@ def _evaluate_selective_policy_throttle(*, policy_state: Any, final_decision: st
     cooldown_meta = dict(meta.get('cooldown_context') or {})
     higher_tf_thesis = dict(meta.get('higher_tf_thesis') or {}) if isinstance(meta.get('higher_tf_thesis'), dict) else {}
     higher_tf_led = str(meta.get('thesis_timeframe') or higher_tf_thesis.get('thesis_timeframe') or '1m') in {'5m', '15m', '30m', '1h'}
+    higher_tf_type = str(higher_tf_thesis.get('thesis_type') or '')
     promoted = bool(promotion_meta.get('promoted'))
     rr_value = float(sig_data.get('r') or 0.0)
     if bool((freshness_meta or {}).get('blocked')):
         return True, 'selective throttle rejects stale candidates during frozen mode'
     if str(final_decision or '').upper() != 'TAKE':
-        if higher_tf_led and not bool((perf_governor or {}).get('suppressed')) and int(score or 0) >= max(int(threshold or 0) - 1, 0) and rr_value >= 1.6:
+        if higher_tf_led and higher_tf_type in {'continuation', 'timeframe_signal', 'context_alignment'} and not bool((perf_governor or {}).get('suppressed')) and int(score or 0) >= max(int(threshold or 0) - 10, 0) and rr_value >= 1.6:
             return False, ''
         return True, 'selective throttle keeps only TAKE candidates during frozen mode'
     min_score = int(threshold or 0)
