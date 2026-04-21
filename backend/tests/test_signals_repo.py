@@ -59,6 +59,21 @@ def test_get_top_pending_review_candidate_uses_execution_feedback_bonus(monkeypa
     monkeypatch.setattr(signals_repo, 'list_signals', lambda db, limit=50, status=None: [candidate_a, candidate_b])
     monkeypatch.setattr(signals_repo.time, 'time', lambda: 2_000_000 / 1000)
     monkeypatch.setattr(signals_repo, '_execution_feedback_bonus', lambda db, signal, lookback_hours=24: 15 if signal is candidate_b else 0)
+    monkeypatch.setattr(signals_repo, '_outcome_feedback_bonus', lambda db, signal, lookback_hours=24: 0)
+
+    top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
+
+    assert top is candidate_b
+
+
+def test_get_top_pending_review_candidate_uses_outcome_feedback_bonus(monkeypatch):
+    candidate_a = SimpleNamespace(meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99, 'thesis_timeframe': '15m', 'thesis_type': 'continuation'}}, created_ts=100, ts=1_999_000)
+    candidate_b = SimpleNamespace(meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99, 'thesis_timeframe': '15m', 'thesis_type': 'continuation'}}, created_ts=100, ts=1_999_000)
+
+    monkeypatch.setattr(signals_repo, 'list_signals', lambda db, limit=50, status=None: [candidate_a, candidate_b])
+    monkeypatch.setattr(signals_repo.time, 'time', lambda: 2_000_000 / 1000)
+    monkeypatch.setattr(signals_repo, '_execution_feedback_bonus', lambda db, signal, lookback_hours=24: 0)
+    monkeypatch.setattr(signals_repo, '_outcome_feedback_bonus', lambda db, signal, lookback_hours=24: 12 if signal is candidate_b else 0)
 
     top = signals_repo.get_top_pending_review_candidate(object(), ttl_sec=900)
 

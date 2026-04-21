@@ -6,6 +6,15 @@ from sqlalchemy.orm import Session
 from core.storage.models import DecisionLog, Signal
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
 def _pending_review_priority(signal: Signal) -> tuple[int, int, int, int]:
     meta = dict(getattr(signal, 'meta', None) or {})
     review = dict(meta.get('review_readiness') or {})
@@ -46,6 +55,35 @@ def _execution_feedback_bonus(db: Session, signal: Signal, *, lookback_hours: in
     return bonus
 
 
+def _outcome_feedback_bonus(db: Session, signal: Signal, *, lookback_hours: int = 24) -> int:
+    meta = dict(getattr(signal, 'meta', None) or {})
+    review = dict(meta.get('review_readiness') or {})
+    thesis_tf = str(review.get('thesis_timeframe') or '')
+    thesis_type = str(review.get('thesis_type') or '')
+    if not thesis_tf or not thesis_type:
+        return 0
+    cutoff = int(time.time() * 1000) - int(max(1, lookback_hours)) * 60 * 60 * 1000
+    rows = (
+        db.query(DecisionLog)
+        .filter(DecisionLog.ts >= cutoff, DecisionLog.type == 'position_closed')
+        .all()
+    )
+    bonus = 0
+    for row in rows:
+        payload = dict(getattr(row, 'payload', None) or {})
+        conviction = dict(payload.get('conviction_profile') or {})
+        if str(conviction.get('thesis_timeframe') or '') != thesis_tf:
+            continue
+        notes = ' '.join(str(item) for item in (payload.get('adaptive_exit') or {}).get('notes', [])).lower()
+        reason = str(payload.get('reason') or '').upper()
+        net_pnl = _safe_float(payload.get('net_pnl'), 0.0)
+        if thesis_type == 'continuation' and ('continuation' in notes or reason == 'TP') and net_pnl > 0:
+            bonus += 12
+        elif reason in {'THESIS_DECAY', 'SL', 'STOP'} or net_pnl < 0:
+            bonus -= 8
+    return bonus
+
+
 def list_signals(db: Session, limit: int = 50, status: str = None) -> List[Signal]:
     query = db.query(Signal)
     if status:
@@ -70,8 +108,8 @@ def get_top_pending_review_candidate(db: Session, *, ttl_sec: int = 900) -> Opti
         if bool(review.get('approval_candidate')):
             approval_rows.append(row)
     if approval_rows:
-        return max(approval_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row)))
-    return max(fresh_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row)))
+        return max(approval_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row) + _outcome_feedback_bonus(db, row)))
+    return max(fresh_rows, key=lambda row: (_pending_review_priority(row), _execution_feedback_bonus(db, row) + _outcome_feedback_bonus(db, row)))
 
 
 def get_signal(db: Session, signal_id: str) -> Optional[Signal]:
