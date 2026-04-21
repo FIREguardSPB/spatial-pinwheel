@@ -155,6 +155,33 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         self.assertFalse(blocked)
         self.assertEqual(reason, '')
 
+    def test_allows_promoted_requested_15m_candidate_with_moderate_gap_in_frozen_mode(self):
+        blocked, reason = _evaluate_selective_policy_throttle(
+            policy_state=SimpleNamespace(selective_throttle=True, selective_min_score_buffer=2, selective_min_rr=1.5, selective_require_governor_pass=True),
+            final_decision='TAKE',
+            score=68,
+            threshold=86,
+            sig_data={
+                'r': 2.4,
+                'meta': {
+                    'thesis_timeframe': '15m',
+                    'timeframe_selection_reason': 'requested',
+                    'high_conviction_promotion': {'promoted': True},
+                    'conviction_profile': {'tier': 'B', 'score_gap': -18, 'economic_filter_valid': True, 'has_blockers': False},
+                    'higher_tf_thesis': {
+                        'thesis_timeframe': '15m',
+                        'thesis_type': 'timeframe_signal',
+                        'structure': 'requested_timeframe_signal',
+                        'side': 'SELL',
+                    },
+                },
+            },
+            perf_governor={'suppressed': False},
+            freshness_meta={'blocked': False},
+        )
+        self.assertFalse(blocked)
+        self.assertEqual(reason, '')
+
     def test_allows_high_quality_take_candidates_in_frozen_mode(self):
         blocked, reason = _evaluate_selective_policy_throttle(
             policy_state=SimpleNamespace(selective_throttle=True, selective_min_score_buffer=2, selective_min_rr=1.5, selective_require_governor_pass=True),

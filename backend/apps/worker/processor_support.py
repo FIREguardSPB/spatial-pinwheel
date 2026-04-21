@@ -216,6 +216,7 @@ def _evaluate_selective_policy_throttle(*, policy_state: Any, final_decision: st
     higher_tf_type = str(higher_tf_thesis.get('thesis_type') or '')
     promoted = bool(promotion_meta.get('promoted'))
     rr_value = float(sig_data.get('r') or 0.0)
+    tradeable_higher_tf = higher_tf_led and str(conviction_meta.get('tier') or 'C') in {'B', 'A', 'A+'} and conviction_meta.get('economic_filter_valid') is not False and not bool(conviction_meta.get('has_blockers'))
     if bool((freshness_meta or {}).get('blocked')):
         return True, 'selective throttle rejects stale candidates during frozen mode'
     if str(final_decision or '').upper() != 'TAKE':
@@ -231,6 +232,8 @@ def _evaluate_selective_policy_throttle(*, policy_state: Any, final_decision: st
             min_score += int(getattr(policy_state, 'selective_min_score_buffer', 0) or 0)
     if bool(cooldown_meta.get('active')):
         min_score += 2
+    if str(final_decision or '').upper() == 'TAKE' and promoted and tradeable_higher_tf and int(score or 0) >= max(int(threshold or 0) - 20, 0) and rr_value >= 1.25:
+        return False, ''
     if int(score or 0) < min_score:
         return True, f'selective throttle requires score >= {min_score}'
     min_rr = float(getattr(policy_state, 'selective_min_rr', 0.0) or 0.0)
