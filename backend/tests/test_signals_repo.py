@@ -232,6 +232,19 @@ def test_session_phase_bias_prefers_midday_requested_15m():
     assert bias > 0
 
 
+def test_throughput_preserving_bonus_protects_strong_higher_tf_candidate():
+    signal = SimpleNamespace(meta={'review_readiness': {
+        'approval_candidate': True,
+        'thesis_timeframe': '15m',
+        'selection_reason': 'requested',
+        'queue_priority': 109,
+    }})
+
+    bonus = signals_repo._throughput_preserving_bonus(signal)
+
+    assert bonus > 0
+
+
 def test_apply_confidence_shaping_writes_multiplier_into_review_readiness(monkeypatch):
     signal = SimpleNamespace(meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99}})
 

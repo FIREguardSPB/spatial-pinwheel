@@ -131,13 +131,15 @@ class TestDecisionEngine(unittest.TestCase):
 
         # 1. Test Low R Reject
         sig_bad_r = MockSignal(entry=1000, sl=999, tp=1001, r=1.0)  # R=1
-        res = engine.evaluate(sig_bad_r, snapshot)
+        with patch('apps.worker.decision_engine.rules.check_session', return_value=None):
+            res = engine.evaluate(sig_bad_r, snapshot)
         self.assertEqual(res.decision, Decision.REJECT)
         self.assertTrue(any(r.code == ReasonCode.RR_TOO_LOW for r in res.reasons))
 
         # 2. Test Good Signal (Stub)
         sig_ok = MockSignal(entry=1000, sl=990, tp=1020, r=2.0)
-        res = engine.evaluate(sig_ok, snapshot)
+        with patch('apps.worker.decision_engine.rules.check_session', return_value=None):
+            res = engine.evaluate(sig_ok, snapshot)
         self.assertIn(res.decision, [Decision.TAKE, Decision.SKIP])
         self.assertGreaterEqual(res.score, 0)
         # Check metrics populated
@@ -146,7 +148,8 @@ class TestDecisionEngine(unittest.TestCase):
         # P0 Verification: nearest_level should be None (not found in small window)
         # Case: Entry 2000 (above all highs) -> No Resistance -> None
         sig_ath = MockSignal(entry=2000, sl=1990, tp=2020, r=2.0)
-        res_ath = engine.evaluate(sig_ath, snapshot)
+        with patch('apps.worker.decision_engine.rules.check_session', return_value=None):
+            res_ath = engine.evaluate(sig_ath, snapshot)
         self.assertIsNone(res_ath.metrics["nearest_level"])
 
         # Case: Entry 1000 -> Resistance found
@@ -292,7 +295,8 @@ class TestDecisionEngine(unittest.TestCase):
 
         # Perfect Signal (should get max score from active weights)
         sig = MockSignal(entry=100, sl=99, tp=110)
-        res = engine.evaluate(sig, snapshot)
+        with patch('apps.worker.decision_engine.rules.check_session', return_value=None):
+            res = engine.evaluate(sig, snapshot)
 
         self.assertLessEqual(res.score_pct, 100)
         self.assertEqual(res.score_max, 60)

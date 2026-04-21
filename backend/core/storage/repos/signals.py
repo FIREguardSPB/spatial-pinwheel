@@ -284,6 +284,18 @@ def _session_phase_bias(signal: Signal) -> int:
     return 0
 
 
+def _throughput_preserving_bonus(signal: Signal) -> int:
+    meta = dict(getattr(signal, 'meta', None) or {})
+    review = dict(meta.get('review_readiness') or {})
+    thesis_tf = str(review.get('thesis_timeframe') or '')
+    selection_reason = str(review.get('selection_reason') or '')
+    queue_priority = int(review.get('queue_priority') or 0)
+    approval_candidate = bool(review.get('approval_candidate'))
+    if approval_candidate and thesis_tf in {'5m', '15m'} and selection_reason in {'requested', 'confirmation'} and queue_priority >= 95:
+        return 6
+    return 0
+
+
 def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
     return (
         _execution_feedback_bonus(db, signal)
@@ -294,6 +306,7 @@ def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
         + _diversification_bias(db, signal)
         + _correlation_nudge(db, signal)
         + _session_phase_bias(signal)
+        + _throughput_preserving_bonus(signal)
     )
 
 
