@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from core.config import get_token, settings as config
 from core.events.bus import bus
+from core.execution.idempotent_submit import close_position_client_order_id
+from core.execution.order_lifecycle import OrderLifecycleManager, map_broker_execution_status
 from core.services.adaptive_exit import AdaptiveExitManager
 from core.services.exit_diagnostics import build_exit_diagnostics
 from core.services.excursion_tracker import update_position_excursion
@@ -86,6 +88,21 @@ class PositionMonitor:
         self._bar_counters: dict[str, int] = {}
         self._dynamic_hold_overrides: dict[str, int] = {}
 
+    def _signal_feedback_context(self, signal_id: str | None) -> dict:
+        if not signal_id:
+            return {}
+        try:
+            signal = self.db.query(Signal).filter(Signal.id == signal_id).first()
+        except Exception:
+            return {}
+        meta = dict((signal.meta or {}) if signal else {})
+        return {
+            'conviction_profile': dict(meta.get('conviction_profile') or {}),
+            'high_conviction_promotion': dict(meta.get('high_conviction_promotion') or {}),
+            'review_readiness': dict(meta.get('review_readiness') or {}),
+            'execution_quality_seed': dict(meta.get('execution_quality_seed') or {}),
+        }
+
     def _effective_time_stop_bars(self, position: Position, default_bars: int) -> int:
         signal_id = getattr(position, 'opened_signal_id', None)
         if not signal_id:
@@ -122,22 +139,25 @@ class PositionMonitor:
         exit_fee = _fee_rub(current_price, close_qty, fees_bps)
         net_realized = gross_realized - exit_fee
         now_ms = int(time.time() * 1000)
-        order = Order(
+        lifecycle = OrderLifecycleManager(self.db)
+        order = lifecycle.create_order(
             order_id=new_prefixed_id('ord_exitpart'),
             instrument_id=position.instrument_id,
-            ts=now_ms,
             side=close_side,
-            type='MARKET',
+            order_type='MARKET',
             price=Decimal(str(current_price)),
             qty=Decimal(str(close_qty)),
-            filled_qty=Decimal(str(close_qty)),
-            status='FILLED',
             related_signal_id=position.opened_signal_id,
             ai_influenced=False,
             ai_mode_used='adaptive_exit',
             strategy=getattr(position, 'strategy', None),
             trace_id=getattr(position, 'trace_id', None),
-        )
+            ts_ms=now_ms,
+            reason='adaptive_partial_close_created',
+        ).order
+        lifecycle.transition(order, 'submitted', reason='paper_submit', created_at=now_ms + 1)
+        lifecycle.transition(order, 'acknowledged', reason='paper_ack', created_at=now_ms + 2)
+        lifecycle.transition(order, 'filled', reason='adaptive_partial_close_fill', filled_qty=Decimal(str(close_qty)), created_at=now_ms + 3)
         trade = Trade(
             trade_id=new_prefixed_id('trd_exitpart'),
             instrument_id=position.instrument_id,
@@ -255,6 +275,9 @@ class PositionMonitor:
             mfe_capture_ratio=mfe_capture_ratio,
             mfe_pct=float(getattr(position, 'mfe_pct', 0) or 0),
             mae_pct=float(getattr(position, 'mae_pct', 0) or 0),
+            position_qty=float(position.qty or 0),
+            total_fees_est=float(getattr(position, 'total_fees_est', 0) or 0),
+            best_price_seen=float(getattr(position, 'best_price_seen', 0) or 0),
         )
         if exit_decision.extend_hold_bars is not None and exit_decision.extend_hold_bars > effective_time_stop:
             self._dynamic_hold_overrides[instrument_id] = int(exit_decision.extend_hold_bars)
@@ -329,23 +352,37 @@ class PositionMonitor:
         now_ms = int(time.time() * 1000)
         trace_id = getattr(position, 'trace_id', None)
         strategy_name = getattr(position, 'strategy', None)
-        close_order = Order(
+        lifecycle = OrderLifecycleManager(self.db)
+        create_result = lifecycle.create_order(
             order_id=new_prefixed_id('ord_close'),
+            client_order_id=close_position_client_order_id(
+                instrument_id=instrument_id,
+                opened_order_id=getattr(position, 'opened_order_id', None),
+                opened_signal_id=getattr(position, 'opened_signal_id', None),
+                opened_ts=getattr(position, 'opened_ts', None),
+                side=close_side,
+                purpose='paper_close',
+            ),
             instrument_id=instrument_id,
-            ts=now_ms,
             side=close_side,
-            type='MARKET',
+            order_type='MARKET',
             price=Decimal(str(close_price)),
             qty=closed_qty,
-            filled_qty=closed_qty,
-            status='FILLED',
             related_signal_id=None,
             ai_influenced=False,
             ai_mode_used='monitor',
             strategy=strategy_name,
             trace_id=trace_id,
+            ts_ms=now_ms,
+            reason='monitor_close_created',
         )
-        self.db.add(close_order)
+        close_order = create_result.order
+        if not create_result.created:
+            logger.info('Duplicate monitor close submit suppressed for %s client_order_id=%s', instrument_id, getattr(close_order, 'client_order_id', None))
+            return
+        lifecycle.transition(close_order, 'submitted', reason='paper_submit', created_at=now_ms + 1)
+        lifecycle.transition(close_order, 'acknowledged', reason='paper_ack', created_at=now_ms + 2)
+        lifecycle.transition(close_order, 'filled', reason=reason.lower(), filled_qty=closed_qty, created_at=now_ms + 3)
         trade = Trade(
             trade_id=new_prefixed_id('trd'),
             instrument_id=instrument_id,
@@ -399,6 +436,7 @@ class PositionMonitor:
             now_ms=now_ms,
         )
         self.db.commit()
+        feedback_ctx = self._signal_feedback_context(position.opened_signal_id)
         append_decision_log_best_effort(
             log_type='position_closed',
             message=f'Closed {instrument_id} @ {close_price:.4f} [{reason}] gross={gross_realized:.2f} net={net_realized:.2f}',
@@ -425,6 +463,10 @@ class PositionMonitor:
                 'slippage_bps': slippage_bps,
                 'exit_diagnostics': exit_diagnostics,
                 'excursion': excursion_meta,
+                'conviction_profile': feedback_ctx.get('conviction_profile'),
+                'high_conviction_promotion': feedback_ctx.get('high_conviction_promotion'),
+                'review_readiness': feedback_ctx.get('review_readiness'),
+                'execution_quality_seed': feedback_ctx.get('execution_quality_seed'),
             },
             ts_ms=now_ms,
         )
