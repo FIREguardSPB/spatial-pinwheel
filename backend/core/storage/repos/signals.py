@@ -240,6 +240,39 @@ def _early_failure_cluster_bias(db: Session, signal: Signal, *, lookback_hours: 
     return -min(15, penalty)
 
 
+def _thesis_reentry_bias(db: Session, signal: Signal, *, lookback_hours: int = 6) -> int:
+    meta = dict(getattr(signal, 'meta', None) or {})
+    review = dict(meta.get('review_readiness') or {})
+    thesis_tf = str(review.get('thesis_timeframe') or '')
+    thesis_type = str(review.get('thesis_type') or '')
+    selection_reason = str(review.get('selection_reason') or '')
+    instrument_id = str(getattr(signal, 'instrument_id', '') or '')
+    if thesis_tf not in {'5m', '15m'} or thesis_type not in {'continuation', 'timeframe_signal', 'context_alignment'} or selection_reason not in {'requested', 'confirmation'}:
+        return 0
+    cutoff = int(time.time() * 1000) - int(max(1, lookback_hours)) * 60 * 60 * 1000
+    rows = (
+        db.query(DecisionLog)
+        .filter(DecisionLog.ts >= cutoff, DecisionLog.type == 'position_closed')
+        .all()
+    )
+    for row in rows:
+        payload = dict(getattr(row, 'payload', None) or {})
+        review_ctx = dict(payload.get('review_readiness') or {})
+        diag = dict(payload.get('exit_diagnostics') or {})
+        if str(payload.get('instrument_id') or '') != instrument_id:
+            continue
+        if str(review_ctx.get('thesis_timeframe') or '') != thesis_tf:
+            continue
+        if str(review_ctx.get('thesis_type') or '') != thesis_type:
+            continue
+        if str(diag.get('edge_decay_state') or '') != 'early_failure':
+            continue
+        if int(diag.get('bars_held') or 0) > 2:
+            continue
+        return 8
+    return 0
+
+
 def _diversification_bias(db: Session, signal: Signal) -> int:
     instrument_id = str(getattr(signal, 'instrument_id', '') or '')
     if not instrument_id:
@@ -338,6 +371,7 @@ def _confidence_shaping_bias(db: Session, signal: Signal) -> int:
         + _regime_aware_learning_bias(db, signal)
         + _instrument_fatigue_bias(db, signal)
         + _early_failure_cluster_bias(db, signal)
+        + _thesis_reentry_bias(db, signal)
         + _diversification_bias(db, signal)
         + _correlation_nudge(db, signal)
         + _session_phase_bias(signal)

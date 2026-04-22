@@ -87,6 +87,7 @@ def test_get_top_pending_review_candidate_uses_execution_feedback_bonus(monkeypa
     monkeypatch.setattr(signals_repo, '_outcome_feedback_bonus', lambda db, signal, lookback_hours=24: 0)
     monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_early_failure_cluster_bias', lambda db, signal, lookback_hours=6: 0)
+    monkeypatch.setattr(signals_repo, '_thesis_reentry_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_diversification_bias', lambda db, signal: 0)
     monkeypatch.setattr(signals_repo, '_correlation_nudge', lambda db, signal: 0)
 
@@ -105,6 +106,7 @@ def test_get_top_pending_review_candidate_uses_outcome_feedback_bonus(monkeypatc
     monkeypatch.setattr(signals_repo, '_outcome_feedback_bonus', lambda db, signal, lookback_hours=24: 12 if signal is candidate_b else 0)
     monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_early_failure_cluster_bias', lambda db, signal, lookback_hours=6: 0)
+    monkeypatch.setattr(signals_repo, '_thesis_reentry_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_diversification_bias', lambda db, signal: 0)
     monkeypatch.setattr(signals_repo, '_correlation_nudge', lambda db, signal: 0)
 
@@ -124,6 +126,7 @@ def test_get_top_pending_review_candidate_uses_symbol_thesis_learning_bias(monke
     monkeypatch.setattr(signals_repo, '_symbol_thesis_learning_bias', lambda db, signal, lookback_hours=24: 20 if signal is candidate_b else 0)
     monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_early_failure_cluster_bias', lambda db, signal, lookback_hours=6: 0)
+    monkeypatch.setattr(signals_repo, '_thesis_reentry_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_diversification_bias', lambda db, signal: 0)
     monkeypatch.setattr(signals_repo, '_correlation_nudge', lambda db, signal: 0)
 
@@ -144,6 +147,7 @@ def test_get_top_pending_review_candidate_uses_regime_aware_learning_bias(monkey
     monkeypatch.setattr(signals_repo, '_regime_aware_learning_bias', lambda db, signal, lookback_hours=24: 10 if signal is candidate_b else 0)
     monkeypatch.setattr(signals_repo, '_instrument_fatigue_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_early_failure_cluster_bias', lambda db, signal, lookback_hours=6: 0)
+    monkeypatch.setattr(signals_repo, '_thesis_reentry_bias', lambda db, signal, lookback_hours=6: 0)
     monkeypatch.setattr(signals_repo, '_diversification_bias', lambda db, signal: 0)
     monkeypatch.setattr(signals_repo, '_correlation_nudge', lambda db, signal: 0)
 
@@ -207,6 +211,35 @@ def test_early_failure_cluster_bias_penalizes_fast_losing_cluster():
     bias = signals_repo._early_failure_cluster_bias(_DB(), signal, lookback_hours=6)
 
     assert bias < 0
+
+
+def test_thesis_reentry_bias_rewards_reentry_when_entry_failed_fast_but_thesis_alive():
+    rows = [
+        SimpleNamespace(type='position_closed', payload={
+            'instrument_id': 'TQBR:SBER',
+            'review_readiness': {'thesis_timeframe': '15m', 'thesis_type': 'continuation'},
+            'exit_diagnostics': {'edge_decay_state': 'early_failure', 'bars_held': 1},
+        }),
+    ]
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+        def all(self):
+            return rows
+
+    class _DB:
+        def query(self, _model):
+            return _Query()
+
+    signal = SimpleNamespace(instrument_id='TQBR:SBER', meta={'review_readiness': {
+        'thesis_timeframe': '15m',
+        'thesis_type': 'continuation',
+        'selection_reason': 'requested',
+    }})
+    bias = signals_repo._thesis_reentry_bias(_DB(), signal, lookback_hours=6)
+
+    assert bias > 0
 
 
 def test_diversification_bias_rewards_less_crowded_instrument():
