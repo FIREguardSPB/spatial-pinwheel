@@ -153,6 +153,9 @@ def _dashboard_payload_sync(db: Session, history_days: int, signals_limit: int, 
     def _build() -> dict[str, Any]:
         account_summary = account_router.build_account_summary_sync(db)
         account_history = account_router.build_account_history_sync(db, history_days)
+        runtime_payload = build_settings_runtime_snapshot(db)
+        trades_payload = trades_router.build_trades_payload(db, limit=20, offset=0)
+        trade_stats = trades_router.build_trade_stats_payload(db)
         orders_payload = {'items': [_row_to_dict(item) for item in state_repo.list_orders(db, active_only=True)], 'degraded': False, 'error': None}
         positions_payload = {'items': [_row_to_dict(item) for item in state_repo.list_positions(db)], 'degraded': False, 'error': None}
         signals_payload = signals_router.list_signals(limit=signals_limit, status=None, db=db, compact_meta=True)
@@ -162,8 +165,11 @@ def _dashboard_payload_sync(db: Session, history_days: int, signals_limit: int, 
         return {
             'account_summary': account_summary,
             'account_history': account_history,
+            'runtime': runtime_payload,
             'orders': orders_payload,
             'positions': positions_payload,
+            'trades': trades_payload,
+            'trade_stats': trade_stats,
             'signals': signals_payload,
             'signals_summary': _signals_summary(signals_payload.get('items') or [], total_count=signals_repo.count_signals(db), latest_ts=signals_repo.latest_signal_ts(db)),
             'latest_candle': latest_candle,

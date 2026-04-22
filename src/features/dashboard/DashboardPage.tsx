@@ -34,6 +34,9 @@ export default function DashboardPage() {
   const watchlist = useMemo(() => runtime?.watchlist ?? [], [runtime?.watchlist]);
   const summary = page.data?.account_summary;
   const history = page.data?.account_history;
+  const trades = page.data?.trades?.items ?? [];
+  const tradeStats = page.data?.trade_stats;
+  const traderWorkspace = runtime?.trader_workspace_runtime as Record<string, any> | undefined;
   const signals = page.data?.signals?.items ?? [];
   const positions = page.data?.positions?.items ?? [];
   const orders = page.data?.orders?.items ?? [];
@@ -200,7 +203,48 @@ export default function DashboardPage() {
             </div>
           </QueryBlock>
         </Surface>
+
+        <Surface title="Trader-in-Chief" description="Текущее мнение главного трейдера, оппонента и итогового тезиса.">
+          <QueryBlock isLoading={page.isLoading && !page.data} isError={page.isError && !page.data} errorMessage="Не удалось загрузить Trader-in-Chief workspace" onRetry={refetchAll}>
+            <div className="space-y-2">
+              <ValueRow label="Инструмент" value={traderWorkspace?.latest_instrument_id ?? '—'} />
+              <ValueRow label="Статус сигнала" value={traderWorkspace?.latest_status ?? '—'} />
+              <ValueRow label="Trader action" value={traderWorkspace?.trader_shadow?.action ?? '—'} />
+              <ValueRow label="Challenger stance" value={traderWorkspace?.challenger_shadow?.stance ?? '—'} />
+              <ValueRow label="Consensus" value={traderWorkspace?.agent_merge_shadow?.consensus_action ?? '—'} />
+              <ValueRow label="Thesis state" value={traderWorkspace?.agent_thesis_shadow?.thesis_state ?? '—'} />
+              <ValueRow label="Re-entry" value={fmtBool(traderWorkspace?.agent_thesis_shadow?.reentry_allowed, 'Да', 'Нет')} />
+              <ValueRow label="Winner intent" value={traderWorkspace?.agent_thesis_shadow?.winner_management_intent ?? '—'} />
+            </div>
+          </QueryBlock>
+        </Surface>
       </div>
+
+      <Surface title="Сделки" description="Последние сделки и компактная статистика для оператора.">
+        <QueryBlock isLoading={page.isLoading && !page.data} isError={page.isError && !page.data} errorMessage="Не удалось загрузить сделки" onRetry={refetchAll}>
+          <div className="grid gap-3 xl:grid-cols-2">
+            <div className="space-y-2">
+              <ValueRow label="Всего сделок" value={fmtNumber(tradeStats?.total_trades)} />
+              <ValueRow label="Win rate" value={tradeStats?.win_rate != null ? `${fmtNumber(tradeStats.win_rate)}%` : '—'} />
+              <ValueRow label="Total PnL" value={fmtMoney(tradeStats?.total_pnl)} />
+              <ValueRow label="Profit factor" value={tradeStats?.profit_factor != null ? fmtNumber(tradeStats.profit_factor) : '—'} />
+            </div>
+            <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-3 text-sm text-gray-200">
+              <div className="mb-2 font-medium text-gray-100">Последние сделки</div>
+              <div className="space-y-1">
+                {trades.slice(0, 5).map((trade: any) => (
+                  <div key={`${trade.id ?? trade.ts}-${trade.instrument_id}`} className="flex items-center justify-between gap-3 text-xs">
+                    <span>{trade.instrument_id ?? '—'}</span>
+                    <span>{trade.outcome ?? trade.reason ?? '—'}</span>
+                    <span>{fmtMoney(trade.net_pnl ?? trade.pnl ?? 0)}</span>
+                  </div>
+                ))}
+                {trades.length === 0 ? <div className="text-xs text-gray-400">Сделок пока нет</div> : null}
+              </div>
+            </div>
+          </div>
+        </QueryBlock>
+      </Surface>
 
       <Surface title="Профилирование worker pipeline" description="Живые timings по последнему meaningful анализу: видно, где бот реально тратит время.">
         <QueryBlock isLoading={page.isLoading && !page.data} isError={page.isError && !page.data} errorMessage="Не удалось загрузить telemetry воркера" onRetry={refetchAll}>

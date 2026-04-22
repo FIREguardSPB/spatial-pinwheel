@@ -69,9 +69,19 @@ describe('DashboardPage', () => {
           worker_status: { ok: false, phase: 'offline' },
           schedule: { is_open: true, is_trading_day: true, trading_day: '2026-04-21', exchange: 'MOEX', current_session_start: '2026-04-21T06:50:00+03:00', current_session_end: '2026-04-21T18:59:59+03:00', next_open: '2026-04-21T19:00:00+03:00' },
           watchlist: [{ instrument_id: 'TQBR:SBER', ticker: 'SBER' }],
+          trader_workspace_runtime: {
+            latest_instrument_id: 'TQBR:MOEX',
+            latest_status: 'executed',
+            trader_shadow: { action: 'take' },
+            challenger_shadow: { stance: 'approve' },
+            agent_merge_shadow: { consensus_action: 'take' },
+            agent_thesis_shadow: { thesis_state: 'alive', reentry_allowed: true, winner_management_intent: 'preserve' },
+          },
         },
         account_summary: { balance: 100000, open_pnl: 0, day_pnl: 0 },
         account_history: { period_days: 7, points: [] },
+        trades: { items: [{ id: 't1', instrument_id: 'TQBR:MOEX', outcome: 'win', net_pnl: 1200 }], total: 1 },
+        trade_stats: { total_trades: 1, win_rate: 100, total_pnl: 1200, avg_trade_pnl: 1200, best_trade: 1200, worst_trade: 1200, wins_count: 1, losses_count: 0, profit_factor: 2.5, avg_duration_sec: 600 },
         positions: { items: [] },
         orders: { items: [] },
         signals: { items: [] },
@@ -83,6 +93,8 @@ describe('DashboardPage', () => {
 
     expect(screen.getByText('График инструмента')).toBeInTheDocument();
     expect(screen.getByText((text) => text.includes('Последняя свеча:'))).toBeInTheDocument();
+    expect(screen.getByText('Trader-in-Chief')).toBeInTheDocument();
+    expect(screen.getByText('Последние сделки')).toBeInTheDocument();
     expect(screen.queryByText('Не удалось загрузить данные дашборда')).not.toBeInTheDocument();
   });
 
@@ -104,9 +116,19 @@ describe('DashboardPage', () => {
           worker_status: { ok: false, phase: 'offline' },
           schedule: { is_open: true, is_trading_day: true, trading_day: '2026-04-21', exchange: 'MOEX', current_session_start: '2026-04-21T06:50:00+03:00', current_session_end: '2026-04-21T18:59:59+03:00', next_open: '2026-04-21T19:00:00+03:00' },
           watchlist: [{ instrument_id: 'TQBR:SBER', ticker: 'SBER' }],
+          trader_workspace_runtime: {
+            latest_instrument_id: 'TQBR:MOEX',
+            latest_status: 'executed',
+            trader_shadow: { action: 'take' },
+            challenger_shadow: { stance: 'approve' },
+            agent_merge_shadow: { consensus_action: 'take' },
+            agent_thesis_shadow: { thesis_state: 'alive', reentry_allowed: true, winner_management_intent: 'preserve' },
+          },
         },
         account_summary: { balance: 100000, open_pnl: 0, day_pnl: 0 },
         account_history: { period_days: 7, points: [] },
+        trades: { items: [{ id: 't1', instrument_id: 'TQBR:MOEX', outcome: 'win', net_pnl: 1200 }], total: 1 },
+        trade_stats: { total_trades: 1, win_rate: 100, total_pnl: 1200, avg_trade_pnl: 1200, best_trade: 1200, worst_trade: 1200, wins_count: 1, losses_count: 0, profit_factor: 2.5, avg_duration_sec: 600 },
         positions: { items: [] },
         orders: { items: [] },
         signals: { items: [] },

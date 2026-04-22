@@ -35,12 +35,15 @@ export type UiRuntimePayload = {
   settings: RiskSettings;
   schedule: TradingScheduleSnapshot;
   watchlist: WatchlistItem[];
+  watchlist_sector_distribution?: Array<{ sector: string; display_name: string; count: number }>;
   runtime_overview?: RuntimeOverviewPayload | null;
   ai_runtime?: Record<string, unknown> | null;
   telegram?: Record<string, unknown> | null;
   auto_policy?: Record<string, unknown> | null;
   ml_runtime?: Record<string, unknown> | null;
+  sentiment_runtime?: Record<string, unknown> | null;
   pipeline_counters?: Record<string, unknown> | null;
+  trader_workspace_runtime?: Record<string, unknown> | null;
 };
 
 export type UiDashboardPayload = {
@@ -49,6 +52,8 @@ export type UiDashboardPayload = {
   account_history: AccountHistory;
   positions: { items: Position[]; degraded?: boolean; error?: unknown };
   orders: { items: Order[]; degraded?: boolean; error?: unknown };
+  trades?: { items: Trade[]; total?: number; limit?: number; offset?: number; summary?: Record<string, number> };
+  trade_stats?: TradeStatsPayload;
   signals: { items: Signal[]; next_cursor?: string | null };
   signals_summary: Record<string, number>;
   latest_candle?: { instrument_id?: string | null; latest_ts?: number | null; timeframe?: string | null };

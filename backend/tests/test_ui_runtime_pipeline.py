@@ -192,6 +192,42 @@ class PipelineCountersRuntimeTests(unittest.TestCase):
         self.assertEqual(payload['challenger_challenges'], 1)
         self.assertEqual(payload['executed_after_consensus_take'], 1)
 
+    def test_trader_workspace_runtime_summary_exposes_latest_workspace_and_agent_views(self):
+        from core.services import ui_runtime as module
+
+        orig_signal = module.Signal
+        module.Signal = _SignalModel
+        try:
+            row = SimpleNamespace(
+                instrument_id='TQBR:MOEX',
+                status='executed',
+                meta={
+                    'trader_workspace': {'instrument': {'instrument_id': 'TQBR:MOEX'}},
+                    'trader_agent_shadow': {'action': 'take'},
+                    'challenger_agent_shadow': {'stance': 'approve'},
+                    'agent_merge_shadow': {'consensus_action': 'take'},
+                    'agent_thesis_shadow': {'thesis_state': 'alive'},
+                },
+            )
+
+            class _SingleQuery:
+                def order_by(self, *_args, **_kwargs):
+                    return self
+                def first(self):
+                    return row
+
+            class _SingleDB:
+                def query(self, _model):
+                    return _SingleQuery()
+
+            payload = module.build_trader_workspace_runtime_summary(_SingleDB())
+        finally:
+            module.Signal = orig_signal
+
+        self.assertEqual(payload['latest_instrument_id'], 'TQBR:MOEX')
+        self.assertEqual(payload['trader_shadow']['action'], 'take')
+        self.assertEqual(payload['agent_thesis_shadow']['thesis_state'], 'alive')
+
     def test_settings_runtime_snapshot_exposes_market_block(self):
         from core.services import ui_runtime as module
 

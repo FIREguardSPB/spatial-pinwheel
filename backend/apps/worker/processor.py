@@ -82,6 +82,7 @@ from core.ai.state_builder import build_agent_world_state
 from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
 from core.ai.challenger_shadow import build_challenger_agent_shadow
 from core.ai.agent_merge import apply_agent_authority, apply_ai_first_decision, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle
+from core.ai.workspace_builder import build_trader_workspace
 from core.ai.trader_shadow import build_trader_agent_shadow
 
 
@@ -1144,6 +1145,36 @@ class SignalProcessor:
                 risk_state={
                     'policy_state': getattr(policy_state, 'state', 'normal') if policy_state else 'normal',
                     'governor': perf_governor,
+                },
+            )
+            meta['trader_workspace'] = build_trader_workspace(
+                instrument_id=ticker,
+                sig_data=sig_data,
+                evaluation={
+                    'decision': evaluation.decision.value,
+                    'score': int(evaluation.score),
+                    'reasons': [getattr(r.code, 'value', str(r.code)) for r in evaluation.reasons],
+                    'metrics': dict(evaluation.metrics),
+                },
+                market_context={
+                    'regime': (adaptive_plan or {}).get('regime'),
+                    'session_type': getattr(settings, 'trading_session', None),
+                },
+                portfolio_state={
+                    'trade_mode': trade_mode,
+                },
+                risk_state={
+                    'policy_state': getattr(policy_state, 'state', 'normal') if policy_state else 'normal',
+                    'hard_blocked': de_has_blockers or freshness_blocked,
+                },
+                memory_state={
+                    'recent_similar_trades': (historical_context or {}).get('similar_count') if isinstance(historical_context, dict) else None,
+                    'thesis_lineage': [ticker],
+                },
+                policy_context={
+                    'hard_blockers': [getattr(r.code, 'value', str(r.code)) for r in evaluation.reasons if getattr(getattr(r, 'severity', None), 'value', '') == 'block'],
+                    'soft_blockers': [getattr(r.code, 'value', str(r.code)) for r in evaluation.reasons if getattr(getattr(r, 'severity', None), 'value', '') != 'block'],
+                    'advisories': list((perf_governor or {}).get('reasons') or []),
                 },
             )
             meta['trader_agent_shadow'] = build_trader_agent_shadow(

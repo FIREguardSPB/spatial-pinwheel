@@ -18,6 +18,7 @@ from core.storage.repos import ai_repo, settings as settings_repo
 from core.services.sector_filters import enrich_watchlist_items, sector_distribution
 from core.services.instrument_catalog import serialize_watchlist_items
 from core.sentiment.repo import build_collection_status
+from apps.api.routers import trades as trades_router
 
 
 def _now_ms() -> int:
@@ -253,6 +254,34 @@ def build_agent_shadow_runtime_summary(db, lookback_hours: int = 24) -> dict[str
         }
 
 
+def build_trader_workspace_runtime_summary(db) -> dict[str, Any]:
+    try:
+        latest = db.query(Signal).first()
+        meta = dict((getattr(latest, 'meta', None) or {})) if latest else {}
+        workspace = dict(meta.get('trader_workspace') or {})
+        return {
+            'status': 'ready',
+            'latest_instrument_id': getattr(latest, 'instrument_id', None) if latest else None,
+            'latest_status': getattr(latest, 'status', None) if latest else None,
+            'trader_shadow': dict(meta.get('trader_agent_shadow') or {}),
+            'challenger_shadow': dict(meta.get('challenger_agent_shadow') or {}),
+            'agent_merge_shadow': dict(meta.get('agent_merge_shadow') or {}),
+            'agent_thesis_shadow': dict(meta.get('agent_thesis_shadow') or {}),
+            'workspace': workspace,
+        }
+    except Exception:
+        return {
+            'status': 'error',
+            'latest_instrument_id': None,
+            'latest_status': None,
+            'trader_shadow': {},
+            'challenger_shadow': {},
+            'agent_merge_shadow': {},
+            'agent_thesis_shadow': {},
+            'workspace': {},
+        }
+
+
 def build_settings_runtime_snapshot(db) -> dict[str, Any]:
     settings_db = settings_repo.get_settings(db)
     from apps.api.status import build_bot_status_sync
@@ -297,4 +326,5 @@ def build_settings_runtime_snapshot(db) -> dict[str, Any]:
         'pipeline_counters': build_pipeline_counters_summary(db, 24),
         'signal_flow': build_signal_flow_status(db, 60),
         'agent_shadow_runtime': build_agent_shadow_runtime_summary(db, 24),
+        'trader_workspace_runtime': build_trader_workspace_runtime_summary(db),
     }
