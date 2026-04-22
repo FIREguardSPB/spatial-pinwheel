@@ -3,7 +3,7 @@ from __future__ import annotations
 from apps.worker.ai.types import AIDecision, AIResult
 from core.ai.agent_contracts import ChallengerAgentShadowDecision, TraderAgentShadowDecision
 from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
-from core.ai.agent_merge import apply_agent_authority, derive_agent_thesis_hints, merge_agent_shadows
+from core.ai.agent_merge import apply_agent_authority, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle
 from core.ai.challenger_shadow import build_challenger_agent_shadow
 from core.ai.trader_shadow import build_trader_agent_shadow
 from core.ai.state_builder import build_agent_world_state
@@ -168,3 +168,18 @@ def test_derive_agent_thesis_hints_marks_alive_reentry_and_winner_preservation()
     assert hints['thesis_state'] == 'alive'
     assert hints['reentry_allowed'] is True
     assert hints['winner_management_intent'] == 'preserve'
+
+
+def test_should_defer_selective_throttle_for_agent_worthy_higher_tf_candidate():
+    defer = should_defer_selective_throttle(
+        signal_meta={
+            'thesis_timeframe': '15m',
+            'timeframe_selection_reason': 'requested',
+            'conviction_profile': {'tier': 'B', 'rescue_eligible': True},
+        },
+        score=70,
+        threshold=78,
+        rr_value=1.5,
+    )
+
+    assert defer is True

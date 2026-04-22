@@ -81,7 +81,7 @@ from apps.worker.processor_support import (
 from core.ai.state_builder import build_agent_world_state
 from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
 from core.ai.challenger_shadow import build_challenger_agent_shadow
-from core.ai.agent_merge import apply_agent_authority, derive_agent_thesis_hints, merge_agent_shadows
+from core.ai.agent_merge import apply_agent_authority, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle
 from core.ai.trader_shadow import build_trader_agent_shadow
 
 
@@ -850,6 +850,7 @@ class SignalProcessor:
 
         selective_policy_blocked = False
         selective_policy_reason = ''
+        deferred_selective_throttle = False
         if policy_state and getattr(policy_state, 'state', '') == 'frozen' and bool(getattr(policy_state, 'selective_throttle', False)):
             reject_storm_active = signal_repo.detect_reject_storm(db, lookback_minutes=60)
             selective_policy_blocked, selective_policy_reason = _evaluate_selective_policy_throttle(
@@ -861,6 +862,15 @@ class SignalProcessor:
                 perf_governor=perf_governor,
                 freshness_meta=freshness_meta,
             )
+            if selective_policy_blocked and should_defer_selective_throttle(
+                signal_meta=sig_data.get('meta') or {},
+                score=int(event_adjusted_score),
+                threshold=int(effective_threshold),
+                rr_value=float(sig_data.get('r') or 0.0),
+            ):
+                deferred_selective_throttle = True
+                selective_policy_blocked = False
+                selective_policy_reason = ''
             if selective_policy_blocked and _should_thaw_reject_storm(
                 reject_storm_active=reject_storm_active,
                 final_decision=final_decision,
@@ -1172,6 +1182,9 @@ class SignalProcessor:
             )
             if agent_merge_reason:
                 event_merge_reason = f"{event_merge_reason}; {agent_merge_reason}"
+            if deferred_selective_throttle and final_decision != 'TAKE' and str((meta.get('agent_thesis_shadow') or {}).get('thesis_state') or '') != 'alive':
+                final_decision = 'REJECT'
+                event_merge_reason = f"{event_merge_reason}; deferred selective throttle"
         meta["final_decision"] = final_decision
         meta['cognitive_layer'] = cognitive_payload
         review_readiness = _reconcile_review_readiness(meta.get('review_readiness'), conviction_profile)

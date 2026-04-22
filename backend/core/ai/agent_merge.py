@@ -49,3 +49,9 @@ def derive_agent_thesis_hints(*, signal_meta: dict[str, Any], merged_shadow: dic
         'reentry_allowed': reentry_allowed,
         'winner_management_intent': winner_management_intent,
     }
+
+
+def should_defer_selective_throttle(*, signal_meta: dict[str, Any], score: int, threshold: int, rr_value: float) -> bool:
+    meta = dict(signal_meta or {})
+    conviction = dict(meta.get('conviction_profile') or {})
+    return str(meta.get('thesis_timeframe') or '') in {'5m', '15m'} and str(meta.get('timeframe_selection_reason') or '') in {'requested', 'confirmation'} and str(conviction.get('tier') or 'C') in {'B', 'A', 'A+'} and bool(conviction.get('rescue_eligible')) and float(rr_value or 0.0) >= 1.3 and int(score or 0) >= max(int(threshold or 0) - 12, 0)
