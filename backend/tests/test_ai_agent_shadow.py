@@ -3,7 +3,7 @@ from __future__ import annotations
 from apps.worker.ai.types import AIDecision, AIResult
 from core.ai.agent_contracts import ChallengerAgentShadowDecision, TraderAgentShadowDecision
 from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
-from core.ai.agent_merge import apply_agent_authority, apply_ai_first_decision, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle
+from core.ai.agent_merge import apply_agent_authority, apply_ai_first_decision, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle, should_route_through_trader_in_chief_first
 from core.ai.challenger_shadow import build_challenger_agent_shadow
 from core.ai.trader_shadow import build_trader_agent_shadow
 from core.ai.state_builder import build_agent_world_state
@@ -205,3 +205,19 @@ def test_apply_ai_first_decision_keeps_non_take_when_hard_blocked():
 
     assert decision == 'REJECT'
     assert reason == ''
+
+
+def test_should_route_through_trader_in_chief_first_for_agent_worthy_candidate_without_hard_blockers():
+    route_first = should_route_through_trader_in_chief_first(
+        signal_meta={
+            'thesis_timeframe': '15m',
+            'timeframe_selection_reason': 'requested',
+            'conviction_profile': {'tier': 'B', 'rescue_eligible': True},
+        },
+        score=69,
+        threshold=78,
+        rr_value=1.4,
+        hard_blocked=False,
+    )
+
+    assert route_first is True

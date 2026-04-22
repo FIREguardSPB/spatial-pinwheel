@@ -81,7 +81,7 @@ from apps.worker.processor_support import (
 from core.ai.state_builder import build_agent_world_state
 from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
 from core.ai.challenger_shadow import build_challenger_agent_shadow
-from core.ai.agent_merge import apply_agent_authority, apply_ai_first_decision, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle
+from core.ai.agent_merge import apply_agent_authority, apply_ai_first_decision, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle, should_route_through_trader_in_chief_first
 from core.ai.workspace_builder import build_trader_workspace
 from core.ai.trader_shadow import build_trader_agent_shadow
 
@@ -852,6 +852,13 @@ class SignalProcessor:
         selective_policy_blocked = False
         selective_policy_reason = ''
         deferred_selective_throttle = False
+        route_through_trader_first = should_route_through_trader_in_chief_first(
+            signal_meta=sig_data.get('meta') or {},
+            score=int(event_adjusted_score),
+            threshold=int(effective_threshold),
+            rr_value=float(sig_data.get('r') or 0.0),
+            hard_blocked=de_has_blockers or freshness_blocked,
+        )
         if policy_state and getattr(policy_state, 'state', '') == 'frozen' and bool(getattr(policy_state, 'selective_throttle', False)):
             reject_storm_active = signal_repo.detect_reject_storm(db, lookback_minutes=60)
             selective_policy_blocked, selective_policy_reason = _evaluate_selective_policy_throttle(
@@ -863,6 +870,10 @@ class SignalProcessor:
                 perf_governor=perf_governor,
                 freshness_meta=freshness_meta,
             )
+            if selective_policy_blocked and route_through_trader_first:
+                deferred_selective_throttle = True
+                selective_policy_blocked = False
+                selective_policy_reason = ''
             if selective_policy_blocked and should_defer_selective_throttle(
                 signal_meta=sig_data.get('meta') or {},
                 score=int(event_adjusted_score),
@@ -908,12 +919,13 @@ class SignalProcessor:
             from apps.worker.ai.router import AIProviderRouter
 
             ai_min_conf = int(getattr(settings, "ai_min_confidence", 55) or 55)
-            ai_fast_path = evaluate_ai_fast_path(
-                evaluation=evaluation,
-                final_decision=final_decision,
-                perf_governor=perf_governor,
-                freshness_meta=freshness_meta,
-            )
+            if not route_through_trader_first:
+                ai_fast_path = evaluate_ai_fast_path(
+                    evaluation=evaluation,
+                    final_decision=final_decision,
+                    perf_governor=perf_governor,
+                    freshness_meta=freshness_meta,
+                )
 
             if ai_fast_path is not None:
                 merge_reason = f"{event_merge_reason}; {freshness_merge_reason}; AI fast-path skip: {ai_fast_path.reason}"

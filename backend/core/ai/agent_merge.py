@@ -63,3 +63,9 @@ def apply_ai_first_decision(*, current_decision: str, merged_shadow: dict[str, A
     if str((merged_shadow or {}).get('consensus_action') or '') == 'take' and str((merged_shadow or {}).get('challenger_stance') or '') == 'approve':
         return 'TAKE', 'ai_first_consensus_take'
     return str(current_decision or '').upper(), ''
+
+
+def should_route_through_trader_in_chief_first(*, signal_meta: dict[str, Any], score: int, threshold: int, rr_value: float, hard_blocked: bool) -> bool:
+    if hard_blocked:
+        return False
+    return should_defer_selective_throttle(signal_meta=signal_meta, score=score, threshold=threshold, rr_value=rr_value)
