@@ -334,6 +334,10 @@ def _build_conviction_profile(*, final_decision: str, score: int, threshold: int
             tier = 'B'
             frozen_score_buffer_override = 0
             frozen_rr_override = 1.5
+        elif higher_tf_selection_reason in {'requested', 'confirmation'} and higher_tf_led and score_gap >= -12 and net_rr >= 1.05 and level_too_close and (commission_ratio is None or commission_ratio <= 0.70):
+            tier = 'B'
+            frozen_score_buffer_override = 0
+            frozen_rr_override = 1.45
         elif confidence_bias >= 15 and higher_tf_selection_reason in {'requested', 'confirmation'} and higher_tf_led and score_gap >= -16 and net_rr >= 1.0 and (commission_ratio is None or commission_ratio <= 0.8):
             tier = 'B'
             frozen_score_buffer_override = 0
