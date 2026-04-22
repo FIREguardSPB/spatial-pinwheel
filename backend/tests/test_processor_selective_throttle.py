@@ -184,6 +184,33 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         self.assertFalse(blocked)
         self.assertEqual(reason, '')
 
+    def test_allows_requested_higher_tf_near_miss_with_positive_confidence_bias_in_frozen_mode(self):
+        blocked, reason = _evaluate_selective_policy_throttle(
+            policy_state=SimpleNamespace(selective_throttle=True, selective_min_score_buffer=2, selective_min_rr=1.5, selective_require_governor_pass=True),
+            final_decision='REJECT',
+            score=67,
+            threshold=80,
+            sig_data={
+                'r': 1.45,
+                'meta': {
+                    'thesis_timeframe': '15m',
+                    'timeframe_selection_reason': 'requested',
+                    'conviction_profile': {'tier': 'B', 'economic_filter_valid': True, 'has_blockers': False},
+                    'review_readiness': {'confidence_bias': 8},
+                    'higher_tf_thesis': {
+                        'thesis_timeframe': '15m',
+                        'thesis_type': 'continuation',
+                        'structure': 'near_high_break_continuation',
+                        'side': 'BUY',
+                    },
+                },
+            },
+            perf_governor={'suppressed': False},
+            freshness_meta={'blocked': False},
+        )
+        self.assertFalse(blocked)
+        self.assertEqual(reason, '')
+
     def test_allows_promoted_requested_15m_candidate_with_moderate_gap_in_frozen_mode(self):
         blocked, reason = _evaluate_selective_policy_throttle(
             policy_state=SimpleNamespace(selective_throttle=True, selective_min_score_buffer=2, selective_min_rr=1.5, selective_require_governor_pass=True),

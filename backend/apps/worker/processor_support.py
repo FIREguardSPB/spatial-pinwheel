@@ -242,13 +242,17 @@ def _evaluate_selective_policy_throttle(*, policy_state: Any, final_decision: st
     higher_tf_thesis = dict(meta.get('higher_tf_thesis') or {}) if isinstance(meta.get('higher_tf_thesis'), dict) else {}
     higher_tf_led = str(meta.get('thesis_timeframe') or higher_tf_thesis.get('thesis_timeframe') or '1m') in {'5m', '15m', '30m', '1h'}
     higher_tf_type = str(higher_tf_thesis.get('thesis_type') or '')
+    selection_reason = str(meta.get('timeframe_selection_reason') or '')
     promoted = bool(promotion_meta.get('promoted'))
     rr_value = float(sig_data.get('r') or 0.0)
+    confidence_bias = int((meta.get('review_readiness') or {}).get('confidence_bias') or 0) if isinstance(meta.get('review_readiness'), dict) else 0
     tradeable_higher_tf = higher_tf_led and str(conviction_meta.get('tier') or 'C') in {'B', 'A', 'A+'} and conviction_meta.get('economic_filter_valid') is not False and not bool(conviction_meta.get('has_blockers'))
     if bool((freshness_meta or {}).get('blocked')):
         return True, 'selective throttle rejects stale candidates during frozen mode'
     if str(final_decision or '').upper() != 'TAKE':
         if higher_tf_led and higher_tf_type in {'continuation', 'timeframe_signal', 'context_alignment'} and not bool((perf_governor or {}).get('suppressed')) and int(score or 0) >= max(int(threshold or 0) - 10, 0) and rr_value >= 1.6:
+            return False, ''
+        if tradeable_higher_tf and selection_reason in {'requested', 'confirmation'} and not bool((perf_governor or {}).get('suppressed')) and int(score or 0) >= max(int(threshold or 0) - 14, 0) and rr_value >= 1.4 and confidence_bias >= 6:
             return False, ''
         return True, 'selective throttle keeps only TAKE candidates during frozen mode'
     min_score = int(threshold or 0)
