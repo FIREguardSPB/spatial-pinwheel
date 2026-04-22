@@ -71,6 +71,7 @@ from apps.worker.processor_support import (
     _should_queue_capacity_blocked_candidate,
     _should_relax_governor_suppression,
     _evaluate_selective_policy_throttle,
+    _should_thaw_reject_storm,
     _promote_high_conviction_skip,
     _candidate_timeframes,
     _run_strategy_timeframe_search,
@@ -845,6 +846,7 @@ class SignalProcessor:
         selective_policy_blocked = False
         selective_policy_reason = ''
         if policy_state and getattr(policy_state, 'state', '') == 'frozen' and bool(getattr(policy_state, 'selective_throttle', False)):
+            reject_storm_active = signal_repo.detect_reject_storm(db, lookback_minutes=60)
             selective_policy_blocked, selective_policy_reason = _evaluate_selective_policy_throttle(
                 policy_state=policy_state,
                 final_decision=final_decision,
@@ -854,6 +856,16 @@ class SignalProcessor:
                 perf_governor=perf_governor,
                 freshness_meta=freshness_meta,
             )
+            if selective_policy_blocked and _should_thaw_reject_storm(
+                reject_storm_active=reject_storm_active,
+                final_decision=final_decision,
+                score=event_adjusted_score,
+                threshold=effective_threshold,
+                sig_data=sig_data,
+                perf_governor=perf_governor,
+            ):
+                selective_policy_blocked = False
+                selective_policy_reason = ''
             if selective_policy_blocked:
                 final_decision = 'REJECT'
                 event_merge_reason = f"{event_merge_reason}; selective throttle"

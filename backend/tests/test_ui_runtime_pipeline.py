@@ -92,7 +92,7 @@ class PipelineCountersRuntimeTests(unittest.TestCase):
         module.Signal = _SignalModel
         module.DecisionLog = _DecisionLogModel
         try:
-            db = _FakeDB(signal_counts=[1, 0, 0], trade_count=0, log_counts=[0, 1, 2])
+            db = _FakeDB(signal_counts=[1, 0, 0, 0], trade_count=0, log_counts=[0, 1, 2])
             payload = build_signal_flow_status(db, 60)
         finally:
             module.Signal = orig_signal
@@ -100,6 +100,23 @@ class PipelineCountersRuntimeTests(unittest.TestCase):
 
         self.assertTrue(payload['degraded_throughput'])
         self.assertEqual(payload['suspected_cause'], 'frozen_mode_pressure')
+
+    def test_signal_flow_status_detects_reject_storm_under_frozen_mode(self):
+        from core.services import ui_runtime as module
+
+        orig_signal = module.Signal
+        orig_log = module.DecisionLog
+        module.Signal = _SignalModel
+        module.DecisionLog = _DecisionLogModel
+        try:
+            db = _FakeDB(signal_counts=[12, 0, 0, 11], trade_count=0, log_counts=[0, 0, 8])
+            payload = build_signal_flow_status(db, 60)
+        finally:
+            module.Signal = orig_signal
+            module.DecisionLog = orig_log
+
+        self.assertTrue(payload['degraded_throughput'])
+        self.assertEqual(payload['suspected_cause'], 'reject_storm_frozen_mode')
 
     def test_settings_runtime_snapshot_exposes_market_block(self):
         from core.services import ui_runtime as module

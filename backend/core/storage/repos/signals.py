@@ -430,6 +430,14 @@ def get_oldest_approved_signal(db: Session) -> Optional[Signal]:
     )
 
 
+def detect_reject_storm(db: Session, *, lookback_minutes: int = 60) -> bool:
+    cutoff = int(time.time() * 1000) - int(max(1, lookback_minutes)) * 60 * 1000
+    created = db.query(Signal).filter(Signal.created_ts >= cutoff).count()
+    rejected = db.query(Signal).filter(Signal.created_ts >= cutoff, Signal.status == 'rejected').count()
+    runtime_guards = db.query(DecisionLog).filter(DecisionLog.ts >= cutoff, DecisionLog.type == 'auto_runtime_guard').count()
+    return created >= 10 and rejected >= max(8, int(created * 0.75)) and runtime_guards >= max(5, int(created * 0.5))
+
+
 def get_signal(db: Session, signal_id: str) -> Optional[Signal]:
     return db.query(Signal).filter(Signal.id == signal_id).first()
 

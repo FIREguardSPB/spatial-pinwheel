@@ -160,13 +160,16 @@ def build_signal_flow_status(db, lookback_minutes: int = 60) -> dict[str, Any]:
         created = db.query(Signal).filter(Signal.created_ts >= cutoff).count()
         progressed = db.query(Signal).filter(Signal.created_ts >= cutoff, Signal.status.in_(['executed', 'filled', 'closed', 'approved'])).count()
         pending = db.query(Signal).filter(Signal.created_ts >= cutoff, Signal.status == 'pending_review').count()
+        rejected = db.query(Signal).filter(Signal.created_ts >= cutoff, Signal.status == 'rejected').count()
         execution_rejects = db.query(DecisionLog).filter(DecisionLog.ts >= cutoff, DecisionLog.type == 'execution_risk_block').count()
         cooldown_proceeds = db.query(DecisionLog).filter(DecisionLog.ts >= cutoff, DecisionLog.type == 'cooldown_aware_proceed').count()
         runtime_guards = db.query(DecisionLog).filter(DecisionLog.ts >= cutoff, DecisionLog.type == 'auto_runtime_guard').count()
-        degraded = progressed == 0 and created <= 1
+        degraded = (progressed == 0 and created <= 1) or (created >= 10 and progressed == 0 and rejected >= max(8, int(created * 0.75)))
         suspected = 'healthy'
         if degraded:
-            if runtime_guards > 0:
+            if created >= 10 and progressed == 0 and rejected >= max(8, int(created * 0.75)) and runtime_guards >= max(5, int(created * 0.5)):
+                suspected = 'reject_storm_frozen_mode'
+            elif runtime_guards > 0:
                 suspected = 'frozen_mode_pressure'
             elif cooldown_proceeds > 0:
                 suspected = 'cooldown_pressure'
@@ -180,6 +183,7 @@ def build_signal_flow_status(db, lookback_minutes: int = 60) -> dict[str, Any]:
             'created_last_window': created,
             'progressed_last_window': progressed,
             'pending_review_last_window': pending,
+            'rejected_last_window': rejected,
             'degraded_throughput': degraded,
             'suspected_cause': suspected,
         }
@@ -190,6 +194,7 @@ def build_signal_flow_status(db, lookback_minutes: int = 60) -> dict[str, Any]:
             'created_last_window': 0,
             'progressed_last_window': 0,
             'pending_review_last_window': 0,
+            'rejected_last_window': 0,
             'degraded_throughput': False,
             'suspected_cause': 'runtime_stale',
         }

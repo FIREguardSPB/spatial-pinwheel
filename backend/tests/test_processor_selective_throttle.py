@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from apps.worker.processor_support import _build_conviction_profile, _build_pending_review_outcome_seed, _build_pre_persist_review_enrichment, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip, _reconcile_review_readiness, _should_queue_capacity_blocked_candidate, _should_relax_governor_suppression
+from apps.worker.processor_support import _build_conviction_profile, _build_pending_review_outcome_seed, _build_pre_persist_review_enrichment, _build_review_readiness_seed, _evaluate_selective_policy_throttle, _promote_high_conviction_skip, _reconcile_review_readiness, _should_queue_capacity_blocked_candidate, _should_relax_governor_suppression, _should_thaw_reject_storm
 
 
 class ProcessorSelectiveThrottleTests(unittest.TestCase):
@@ -210,6 +210,25 @@ class ProcessorSelectiveThrottleTests(unittest.TestCase):
         )
         self.assertFalse(blocked)
         self.assertEqual(reason, '')
+
+    def test_reject_storm_thaw_allows_strong_requested_higher_tf_near_miss(self):
+        allowed = _should_thaw_reject_storm(
+            reject_storm_active=True,
+            final_decision='REJECT',
+            score=69,
+            threshold=80,
+            sig_data={
+                'r': 1.35,
+                'meta': {
+                    'thesis_timeframe': '15m',
+                    'timeframe_selection_reason': 'requested',
+                    'conviction_profile': {'tier': 'B'},
+                    'higher_tf_thesis': {'thesis_timeframe': '15m', 'thesis_type': 'continuation'},
+                },
+            },
+            perf_governor={'suppressed': False},
+        )
+        self.assertTrue(allowed)
 
     def test_allows_promoted_requested_15m_candidate_with_moderate_gap_in_frozen_mode(self):
         blocked, reason = _evaluate_selective_policy_throttle(

@@ -281,6 +281,17 @@ def _evaluate_selective_policy_throttle(*, policy_state: Any, final_decision: st
     return False, ''
 
 
+def _should_thaw_reject_storm(*, reject_storm_active: bool, final_decision: str, score: int, threshold: int, sig_data: dict, perf_governor: dict) -> bool:
+    if not reject_storm_active or str(final_decision or '').upper() == 'TAKE' or bool((perf_governor or {}).get('suppressed')):
+        return False
+    meta = dict(((sig_data or {}).get('meta') or {}))
+    conviction = dict(meta.get('conviction_profile') or {})
+    higher_tf_thesis = dict(meta.get('higher_tf_thesis') or {}) if isinstance(meta.get('higher_tf_thesis'), dict) else {}
+    selection_reason = str(meta.get('timeframe_selection_reason') or '')
+    higher_tf_led = str(meta.get('thesis_timeframe') or higher_tf_thesis.get('thesis_timeframe') or '1m') in {'5m', '15m', '30m', '1h'}
+    return higher_tf_led and selection_reason in {'requested', 'confirmation'} and str(conviction.get('tier') or 'C') in {'B', 'A', 'A+'} and float(sig_data.get('r') or 0.0) >= 1.3 and int(score or 0) >= max(int(threshold or 0) - 12, 0)
+
+
 def _build_conviction_profile(*, final_decision: str, score: int, threshold: int, evaluation: Any, perf_governor: dict, freshness_meta: dict, signal_meta: dict | None = None) -> dict:
     reasons = list(getattr(evaluation, 'reasons', []) or [])
     metrics = dict(getattr(evaluation, 'metrics', {}) or {})

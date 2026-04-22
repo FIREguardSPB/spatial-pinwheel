@@ -338,6 +338,25 @@ def test_get_oldest_approved_signal_returns_oldest_row():
     assert row.id == 'older'
 
 
+def test_detect_reject_storm_triggers_on_high_reject_ratio_and_runtime_guards():
+    class _Query:
+        def __init__(self, value):
+            self.value = value
+        def filter(self, *_args, **_kwargs):
+            return self
+        def count(self):
+            return self.value
+
+    class _DB:
+        def __init__(self):
+            self.calls = 0
+        def query(self, _model):
+            self.calls += 1
+            return _Query([12, 11, 8][self.calls - 1])
+
+    assert signals_repo.detect_reject_storm(_DB(), lookback_minutes=60) is True
+
+
 def test_apply_confidence_shaping_writes_multiplier_into_review_readiness(monkeypatch):
     signal = SimpleNamespace(meta={'review_readiness': {'approval_candidate': True, 'queue_priority': 99}})
 
