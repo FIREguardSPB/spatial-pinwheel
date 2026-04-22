@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from apps.worker.ai.types import AIDecision, AIResult
-from core.ai.agent_contracts import TraderAgentShadowDecision
+from core.ai.agent_contracts import ChallengerAgentShadowDecision, TraderAgentShadowDecision
 from core.ai.agent_clients import build_agent_router_config
+from core.ai.agent_merge import apply_agent_authority, merge_agent_shadows
+from core.ai.challenger_shadow import build_challenger_agent_shadow
 from core.ai.trader_shadow import build_trader_agent_shadow
 from core.ai.state_builder import build_agent_world_state
 
@@ -66,3 +68,64 @@ def test_build_agent_router_config_uses_cloud_model_preferences():
     assert cfg.AI_PRIMARY_PROVIDER == 'openai'
     assert cfg.AI_FALLBACK_PROVIDERS == 'claude,deepseek,skip'
     assert cfg.OPENAI_MODEL == 'gpt-5.4'
+
+
+def test_challenger_agent_shadow_maps_objections_to_structured_contract():
+    shadow = build_challenger_agent_shadow(
+        signal_id='sig_2',
+        instrument_id='TQBR:MOEX',
+        stance='approve',
+        confidence=77,
+        main_objections=['none material'],
+        recommended_adjustment='hold_thesis',
+    )
+
+    assert isinstance(shadow, ChallengerAgentShadowDecision)
+    assert shadow.stance == 'approve'
+    assert shadow.confidence == 77
+
+
+def test_merge_agent_shadows_reports_consensus_take():
+    trader = TraderAgentShadowDecision(
+        signal_id='sig_1',
+        instrument_id='TQBR:MOEX',
+        action='take',
+        confidence=84,
+        provider='openai',
+        reasoning='thesis intact',
+        final_decision='REJECT',
+        key_factors=['htf trend intact'],
+    )
+    challenger = ChallengerAgentShadowDecision(
+        signal_id='sig_1',
+        instrument_id='TQBR:MOEX',
+        stance='approve',
+        confidence=79,
+        main_objections=[],
+        recommended_adjustment='none',
+    )
+
+    merged = merge_agent_shadows(trader, challenger)
+
+    assert merged['consensus_action'] == 'take'
+    assert merged['challenger_stance'] == 'approve'
+
+
+def test_apply_agent_authority_only_promotes_in_ambiguity_zone():
+    merged = {
+        'consensus_action': 'take',
+        'trader_confidence': 86,
+        'challenger_confidence': 81,
+        'challenger_stance': 'approve',
+    }
+
+    decision, reason = apply_agent_authority(
+        current_decision='REJECT',
+        score=71,
+        threshold=78,
+        signal_meta={'thesis_timeframe': '15m', 'timeframe_selection_reason': 'requested', 'conviction_profile': {'rescue_eligible': True}},
+        merged_shadow=merged,
+    )
+
+    assert decision == 'TAKE'
+    assert 'agent_consensus_take' in reason

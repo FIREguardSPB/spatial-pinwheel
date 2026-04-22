@@ -26,6 +26,8 @@ def compact_signal_meta(meta: dict[str, Any] | None) -> dict[str, Any]:
     performance_governor = meta.get('performance_governor') if isinstance(meta.get('performance_governor'), dict) else {}
     ai_decision = meta.get('ai_decision') if isinstance(meta.get('ai_decision'), dict) else {}
     trader_agent_shadow = meta.get('trader_agent_shadow') if isinstance(meta.get('trader_agent_shadow'), dict) else {}
+    challenger_agent_shadow = meta.get('challenger_agent_shadow') if isinstance(meta.get('challenger_agent_shadow'), dict) else {}
+    agent_merge_shadow = meta.get('agent_merge_shadow') if isinstance(meta.get('agent_merge_shadow'), dict) else {}
     ml_overlay = meta.get('ml_overlay') if isinstance(meta.get('ml_overlay'), dict) else {}
     geometry_optimizer = meta.get('geometry_optimizer') if isinstance(meta.get('geometry_optimizer'), dict) else {}
     ai_fast_path = meta.get('ai_fast_path') if isinstance(meta.get('ai_fast_path'), dict) else {}
@@ -61,6 +63,15 @@ def compact_signal_meta(meta: dict[str, Any] | None) -> dict[str, Any]:
             'confidence': trader_agent_shadow.get('confidence'),
             'provider': trader_agent_shadow.get('provider'),
             'final_decision': trader_agent_shadow.get('final_decision'),
+        },
+        'challenger_agent_shadow': {
+            'stance': challenger_agent_shadow.get('stance'),
+            'confidence': challenger_agent_shadow.get('confidence'),
+            'recommended_adjustment': challenger_agent_shadow.get('recommended_adjustment'),
+        },
+        'agent_merge_shadow': {
+            'consensus_action': agent_merge_shadow.get('consensus_action'),
+            'challenger_stance': agent_merge_shadow.get('challenger_stance'),
         },
         'auto_policy': {
             'state': auto_policy.get('state'),

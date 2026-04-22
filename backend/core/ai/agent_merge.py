@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+from typing import Any
+
+from core.ai.agent_contracts import ChallengerAgentShadowDecision, TraderAgentShadowDecision
+
+
+def merge_agent_shadows(trader: TraderAgentShadowDecision, challenger: ChallengerAgentShadowDecision) -> dict[str, Any]:
+    consensus = trader.action
+    if challenger.stance == 'challenge' and trader.action == 'take':
+        consensus = 'review'
+    return {
+        'consensus_action': consensus,
+        'trader_confidence': trader.confidence,
+        'challenger_confidence': challenger.confidence,
+        'challenger_stance': challenger.stance,
+        'recommended_adjustment': challenger.recommended_adjustment,
+        'main_objections': list(challenger.main_objections or []),
+    }
+
+
+def apply_agent_authority(*, current_decision: str, score: int, threshold: int, signal_meta: dict[str, Any], merged_shadow: dict[str, Any]) -> tuple[str, str]:
+    decision = str(current_decision or '').upper()
+    consensus = str((merged_shadow or {}).get('consensus_action') or '')
+    selection_reason = str((signal_meta or {}).get('timeframe_selection_reason') or '')
+    thesis_tf = str((signal_meta or {}).get('thesis_timeframe') or '')
+    conviction = dict((signal_meta or {}).get('conviction_profile') or {})
+    if decision in {'REJECT', 'SKIP'} and consensus == 'take' and thesis_tf in {'5m', '15m'} and selection_reason in {'requested', 'confirmation'} and bool(conviction.get('rescue_eligible')) and int(score or 0) >= max(int(threshold or 0) - 10, 0) and int((merged_shadow or {}).get('trader_confidence') or 0) >= 80 and str((merged_shadow or {}).get('challenger_stance') or '') == 'approve':
+        return 'TAKE', 'agent_consensus_take'
+    return decision, ''

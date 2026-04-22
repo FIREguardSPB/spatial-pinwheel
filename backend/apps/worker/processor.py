@@ -80,6 +80,8 @@ from apps.worker.processor_support import (
 )
 from core.ai.state_builder import build_agent_world_state
 from core.ai.agent_clients import build_agent_router_config
+from core.ai.challenger_shadow import build_challenger_agent_shadow
+from core.ai.agent_merge import apply_agent_authority, merge_agent_shadows
 from core.ai.trader_shadow import build_trader_agent_shadow
 
 
@@ -1140,6 +1142,34 @@ class SignalProcessor:
                 instrument_id=ticker,
                 final_decision=final_decision,
             ).to_meta()
+            challenger_shadow = build_challenger_agent_shadow(
+                signal_id=signal_orm.id,
+                instrument_id=ticker,
+                stance='approve' if final_decision == 'TAKE' else 'challenge',
+                confidence=max(55, min(90, int(ai_result.confidence or 0) - (0 if final_decision == 'TAKE' else 5))),
+                main_objections=[] if final_decision == 'TAKE' else ['deterministic engine remained unconvinced'],
+                recommended_adjustment='none' if final_decision == 'TAKE' else 'wait_for_confirmation',
+            )
+            meta['challenger_agent_shadow'] = challenger_shadow.to_meta()
+            merged_shadow = merge_agent_shadows(
+                build_trader_agent_shadow(
+                    ai_result=ai_result,
+                    signal_id=signal_orm.id,
+                    instrument_id=ticker,
+                    final_decision=final_decision,
+                ),
+                challenger_shadow,
+            )
+            meta['agent_merge_shadow'] = merged_shadow
+            final_decision, agent_merge_reason = apply_agent_authority(
+                current_decision=final_decision,
+                score=int(event_adjusted_score),
+                threshold=int(effective_threshold),
+                signal_meta=meta,
+                merged_shadow=merged_shadow,
+            )
+            if agent_merge_reason:
+                event_merge_reason = f"{event_merge_reason}; {agent_merge_reason}"
         meta["final_decision"] = final_decision
         meta['cognitive_layer'] = cognitive_payload
         review_readiness = _reconcile_review_readiness(meta.get('review_readiness'), conviction_profile)

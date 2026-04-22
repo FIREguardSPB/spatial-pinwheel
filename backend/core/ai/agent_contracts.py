@@ -17,3 +17,16 @@ class TraderAgentShadowDecision:
 
     def to_meta(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class ChallengerAgentShadowDecision:
+    signal_id: str
+    instrument_id: str
+    stance: str
+    confidence: int
+    main_objections: list[str] = field(default_factory=list)
+    recommended_adjustment: str = 'none'
+
+    def to_meta(self) -> dict[str, Any]:
+        return asdict(self)
