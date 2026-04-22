@@ -79,7 +79,7 @@ from apps.worker.processor_support import (
     _snapshot_for_history,
 )
 from core.ai.state_builder import build_agent_world_state
-from core.ai.agent_clients import build_agent_router_config
+from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
 from core.ai.challenger_shadow import build_challenger_agent_shadow
 from core.ai.agent_merge import apply_agent_authority, merge_agent_shadows
 from core.ai.trader_shadow import build_trader_agent_shadow
@@ -1142,13 +1142,11 @@ class SignalProcessor:
                 instrument_id=ticker,
                 final_decision=final_decision,
             ).to_meta()
-            challenger_shadow = build_challenger_agent_shadow(
+            challenger_result = await router.analyze(ai_ctx, AIMode.ADVISORY)
+            challenger_shadow = build_challenger_shadow_from_ai_result(
+                ai_result=challenger_result,
                 signal_id=signal_orm.id,
                 instrument_id=ticker,
-                stance='approve' if final_decision == 'TAKE' else 'challenge',
-                confidence=max(55, min(90, int(ai_result.confidence or 0) - (0 if final_decision == 'TAKE' else 5))),
-                main_objections=[] if final_decision == 'TAKE' else ['deterministic engine remained unconvinced'],
-                recommended_adjustment='none' if final_decision == 'TAKE' else 'wait_for_confirmation',
             )
             meta['challenger_agent_shadow'] = challenger_shadow.to_meta()
             merged_shadow = merge_agent_shadows(

@@ -30,10 +30,17 @@ def build_ai_runtime_summary(db, settings_db) -> dict[str, Any]:
     fallbacks = [p.strip().lower() for p in (getattr(settings_db, 'ai_fallback_providers', None) or 'deepseek,ollama,skip').split(',') if p.strip()]
     last = None
     try:
-        recent = ai_repo.list_decisions(db, limit=1)
+        recent = ai_repo.list_decisions(db, limit=5)
         last = recent[0] if recent else None
     except Exception:
+        recent = []
         last = None
+    challenger_challenges = 0
+    for item in recent or []:
+        meta = getattr(item, 'meta', None) or {}
+        challenger = meta.get('challenger_agent_shadow') if isinstance(meta, dict) else {}
+        if isinstance(challenger, dict) and str(challenger.get('stance') or '') == 'challenge':
+            challenger_challenges += 1
     return {
         'status': 'ready',
         'enabled': (getattr(settings_db, 'ai_mode', 'off') or 'off') != 'off',
@@ -61,6 +68,10 @@ def build_ai_runtime_summary(db, settings_db) -> dict[str, Any]:
             }
             if last else {'available': False}
         ),
+        'agent_shadow': {
+            'recent_calls': len(recent or []),
+            'challenger_challenges': challenger_challenges,
+        },
     }
 
 

@@ -134,6 +134,25 @@ class PipelineCountersRuntimeTests(unittest.TestCase):
         self.assertEqual(payload['primary_provider'], 'openai')
         self.assertTrue(payload['last_decision']['available'])
 
+    def test_ai_runtime_summary_exposes_agent_divergence_metrics(self):
+        from core.services import ui_runtime as module
+
+        original_ai_repo = module.ai_repo.list_decisions
+        original_tokens = module.load_runtime_tokens
+        module.ai_repo.list_decisions = lambda _db, limit=5: [
+            SimpleNamespace(provider='openai', decision='TAKE', confidence=81, reasoning='shadow trader liked the setup', meta={'challenger_agent_shadow': {'stance': 'approve'}, 'agent_merge_shadow': {'consensus_action': 'take'}}),
+            SimpleNamespace(provider='claude', decision='REJECT', confidence=84, reasoning='challenger objected', meta={'challenger_agent_shadow': {'stance': 'challenge'}, 'agent_merge_shadow': {'consensus_action': 'review'}}),
+        ]
+        module.load_runtime_tokens = lambda _db, _keys: {}
+        try:
+            payload = module.build_ai_runtime_summary(object(), SimpleNamespace(ai_primary_provider='openai', ai_fallback_providers='claude,deepseek,skip'))
+        finally:
+            module.ai_repo.list_decisions = original_ai_repo
+            module.load_runtime_tokens = original_tokens
+
+        self.assertEqual(payload['agent_shadow']['recent_calls'], 2)
+        self.assertEqual(payload['agent_shadow']['challenger_challenges'], 1)
+
     def test_settings_runtime_snapshot_exposes_market_block(self):
         from core.services import ui_runtime as module
 

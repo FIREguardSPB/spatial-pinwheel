@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from apps.worker.ai.types import AIDecision, AIResult
 from core.ai.agent_contracts import ChallengerAgentShadowDecision, TraderAgentShadowDecision
-from core.ai.agent_clients import build_agent_router_config
+from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
 from core.ai.agent_merge import apply_agent_authority, merge_agent_shadows
 from core.ai.challenger_shadow import build_challenger_agent_shadow
 from core.ai.trader_shadow import build_trader_agent_shadow
@@ -129,3 +129,23 @@ def test_apply_agent_authority_only_promotes_in_ambiguity_zone():
 
     assert decision == 'TAKE'
     assert 'agent_consensus_take' in reason
+
+
+def test_build_challenger_shadow_from_ai_result_uses_real_ai_call_output_shape():
+    ai_result = AIResult(
+        decision=AIDecision.REJECT,
+        confidence=88,
+        reasoning='economics and local structure are poor',
+        provider='claude',
+        key_factors=['economics conflict', 'weak local structure'],
+    )
+
+    challenger = build_challenger_shadow_from_ai_result(
+        ai_result=ai_result,
+        signal_id='sig_3',
+        instrument_id='TQBR:SBER',
+    )
+
+    assert challenger.stance == 'challenge'
+    assert challenger.confidence == 88
+    assert challenger.main_objections == ['economics conflict', 'weak local structure']
