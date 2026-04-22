@@ -154,6 +154,47 @@ def get_watchlist_items(db) -> list[dict[str, Any]]:
     return enrich_watchlist_items(serialize_watchlist_items(db))
 
 
+def build_signal_flow_status(db, lookback_minutes: int = 60) -> dict[str, Any]:
+    cutoff = _now_ms() - int(max(1, lookback_minutes)) * 60 * 1000
+    try:
+        created = db.query(Signal).filter(Signal.created_ts >= cutoff).count()
+        progressed = db.query(Signal).filter(Signal.created_ts >= cutoff, Signal.status.in_(['executed', 'filled', 'closed', 'approved'])).count()
+        pending = db.query(Signal).filter(Signal.created_ts >= cutoff, Signal.status == 'pending_review').count()
+        execution_rejects = db.query(DecisionLog).filter(DecisionLog.ts >= cutoff, DecisionLog.type == 'execution_risk_block').count()
+        cooldown_proceeds = db.query(DecisionLog).filter(DecisionLog.ts >= cutoff, DecisionLog.type == 'cooldown_aware_proceed').count()
+        runtime_guards = db.query(DecisionLog).filter(DecisionLog.ts >= cutoff, DecisionLog.type == 'auto_runtime_guard').count()
+        degraded = progressed == 0 and created <= 1
+        suspected = 'healthy'
+        if degraded:
+            if runtime_guards > 0:
+                suspected = 'frozen_mode_pressure'
+            elif cooldown_proceeds > 0:
+                suspected = 'cooldown_pressure'
+            elif pending > 0 or execution_rejects > 0:
+                suspected = 'execution_backlog'
+            else:
+                suspected = 'no_valid_setups'
+        return {
+            'status': 'ready',
+            'lookback_minutes': int(lookback_minutes),
+            'created_last_window': created,
+            'progressed_last_window': progressed,
+            'pending_review_last_window': pending,
+            'degraded_throughput': degraded,
+            'suspected_cause': suspected,
+        }
+    except Exception:
+        return {
+            'status': 'error',
+            'lookback_minutes': int(lookback_minutes),
+            'created_last_window': 0,
+            'progressed_last_window': 0,
+            'pending_review_last_window': 0,
+            'degraded_throughput': False,
+            'suspected_cause': 'runtime_stale',
+        }
+
+
 def build_settings_runtime_snapshot(db) -> dict[str, Any]:
     settings_db = settings_repo.get_settings(db)
     from apps.api.status import build_bot_status_sync
@@ -196,4 +237,5 @@ def build_settings_runtime_snapshot(db) -> dict[str, Any]:
         'ml_runtime': build_ml_runtime_summary(db, settings_db),
         'sentiment_runtime': build_sentiment_runtime_summary(db, settings_db),
         'pipeline_counters': build_pipeline_counters_summary(db, 24),
+        'signal_flow': build_signal_flow_status(db, 60),
     }

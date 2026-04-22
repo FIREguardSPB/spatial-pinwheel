@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from core.services.ui_runtime import build_pipeline_counters_summary
+from core.services.ui_runtime import build_pipeline_counters_summary, build_signal_flow_status
 
 
 class _Field:
@@ -83,6 +83,23 @@ class PipelineCountersRuntimeTests(unittest.TestCase):
         self.assertEqual(payload['risk_blocks'], 4)
         self.assertEqual(payload['cooldown_aware_proceeds'], 7)
         self.assertEqual(payload['execution_stage_rejects'], 5)
+
+    def test_signal_flow_status_explains_frozen_mode_silence(self):
+        from core.services import ui_runtime as module
+
+        orig_signal = module.Signal
+        orig_log = module.DecisionLog
+        module.Signal = _SignalModel
+        module.DecisionLog = _DecisionLogModel
+        try:
+            db = _FakeDB(signal_counts=[1, 0, 0], trade_count=0, log_counts=[0, 1, 2])
+            payload = build_signal_flow_status(db, 60)
+        finally:
+            module.Signal = orig_signal
+            module.DecisionLog = orig_log
+
+        self.assertTrue(payload['degraded_throughput'])
+        self.assertEqual(payload['suspected_cause'], 'frozen_mode_pressure')
 
     def test_settings_runtime_snapshot_exposes_market_block(self):
         from core.services import ui_runtime as module
