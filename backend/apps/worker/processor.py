@@ -81,7 +81,7 @@ from apps.worker.processor_support import (
 from core.ai.state_builder import build_agent_world_state
 from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
 from core.ai.challenger_shadow import build_challenger_agent_shadow
-from core.ai.agent_merge import apply_agent_authority, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle
+from core.ai.agent_merge import apply_agent_authority, apply_ai_first_decision, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle
 from core.ai.trader_shadow import build_trader_agent_shadow
 
 
@@ -1173,6 +1173,13 @@ class SignalProcessor:
                 signal_meta=meta,
                 merged_shadow=merged_shadow,
             )
+            final_decision, ai_first_reason = apply_ai_first_decision(
+                current_decision=final_decision,
+                merged_shadow=merged_shadow,
+                hard_blocked=de_has_blockers or freshness_blocked,
+            )
+            if ai_first_reason:
+                event_merge_reason = f"{event_merge_reason}; {ai_first_reason}"
             final_decision, agent_merge_reason = apply_agent_authority(
                 current_decision=final_decision,
                 score=int(event_adjusted_score),

@@ -55,3 +55,11 @@ def should_defer_selective_throttle(*, signal_meta: dict[str, Any], score: int, 
     meta = dict(signal_meta or {})
     conviction = dict(meta.get('conviction_profile') or {})
     return str(meta.get('thesis_timeframe') or '') in {'5m', '15m'} and str(meta.get('timeframe_selection_reason') or '') in {'requested', 'confirmation'} and str(conviction.get('tier') or 'C') in {'B', 'A', 'A+'} and bool(conviction.get('rescue_eligible')) and float(rr_value or 0.0) >= 1.3 and int(score or 0) >= max(int(threshold or 0) - 12, 0)
+
+
+def apply_ai_first_decision(*, current_decision: str, merged_shadow: dict[str, Any], hard_blocked: bool) -> tuple[str, str]:
+    if hard_blocked:
+        return str(current_decision or '').upper(), ''
+    if str((merged_shadow or {}).get('consensus_action') or '') == 'take' and str((merged_shadow or {}).get('challenger_stance') or '') == 'approve':
+        return 'TAKE', 'ai_first_consensus_take'
+    return str(current_decision or '').upper(), ''

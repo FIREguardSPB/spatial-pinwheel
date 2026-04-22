@@ -3,7 +3,7 @@ from __future__ import annotations
 from apps.worker.ai.types import AIDecision, AIResult
 from core.ai.agent_contracts import ChallengerAgentShadowDecision, TraderAgentShadowDecision
 from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
-from core.ai.agent_merge import apply_agent_authority, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle
+from core.ai.agent_merge import apply_agent_authority, apply_ai_first_decision, derive_agent_thesis_hints, merge_agent_shadows, should_defer_selective_throttle
 from core.ai.challenger_shadow import build_challenger_agent_shadow
 from core.ai.trader_shadow import build_trader_agent_shadow
 from core.ai.state_builder import build_agent_world_state
@@ -183,3 +183,25 @@ def test_should_defer_selective_throttle_for_agent_worthy_higher_tf_candidate():
     )
 
     assert defer is True
+
+
+def test_apply_ai_first_decision_promotes_consensus_take_when_no_hard_blockers():
+    decision, reason = apply_ai_first_decision(
+        current_decision='SKIP',
+        merged_shadow={'consensus_action': 'take', 'challenger_stance': 'approve'},
+        hard_blocked=False,
+    )
+
+    assert decision == 'TAKE'
+    assert reason == 'ai_first_consensus_take'
+
+
+def test_apply_ai_first_decision_keeps_non_take_when_hard_blocked():
+    decision, reason = apply_ai_first_decision(
+        current_decision='REJECT',
+        merged_shadow={'consensus_action': 'take', 'challenger_stance': 'approve'},
+        hard_blocked=True,
+    )
+
+    assert decision == 'REJECT'
+    assert reason == ''
