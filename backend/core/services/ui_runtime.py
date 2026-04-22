@@ -50,14 +50,16 @@ def build_ai_runtime_summary(db, settings_db) -> dict[str, Any]:
         },
         'last_decision': (
             {
+                'available': True,
                 'ts': getattr(last, 'ts', None),
                 'instrument_id': getattr(last, 'instrument_id', None),
                 'provider': getattr(last, 'provider', None),
-                'ai_decision': getattr(last, 'ai_decision', None),
+                'ai_decision': getattr(last, 'ai_decision', None) or getattr(last, 'decision', None),
                 'final_decision': getattr(last, 'final_decision', None),
-                'ai_confidence': getattr(last, 'ai_confidence', None),
+                'ai_confidence': getattr(last, 'ai_confidence', None) or getattr(last, 'confidence', None),
+                'reasoning': getattr(last, 'reasoning', None),
             }
-            if last else None
+            if last else {'available': False}
         ),
     }
 

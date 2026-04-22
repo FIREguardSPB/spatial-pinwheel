@@ -78,6 +78,9 @@ from apps.worker.processor_support import (
     _attach_execution_geometry,
     _snapshot_for_history,
 )
+from core.ai.state_builder import build_agent_world_state
+from core.ai.agent_clients import build_agent_router_config
+from core.ai.trader_shadow import build_trader_agent_shadow
 
 
 class SignalProcessor:
@@ -978,16 +981,7 @@ class SignalProcessor:
                     trader_sentiment=trader_sentiment,
                 )
 
-                router_config = SimpleNamespace(
-                    AI_PRIMARY_PROVIDER=getattr(settings, "ai_primary_provider", None) or "deepseek",
-                    AI_FALLBACK_PROVIDERS=getattr(settings, "ai_fallback_providers", None) or "deepseek,ollama,skip",
-                    OLLAMA_BASE_URL=getattr(settings, "ollama_url", None) or "http://localhost:11434",
-                    OLLAMA_MODEL=getattr(runtime_config, "OLLAMA_MODEL", "llama3.1:8b"),
-                    CLAUDE_MODEL=getattr(runtime_config, "CLAUDE_MODEL", "claude-sonnet-4-6"),
-                    OPENAI_MODEL=getattr(runtime_config, "OPENAI_MODEL", "gpt-4o"),
-                    DEEPSEEK_MODEL=getattr(runtime_config, "DEEPSEEK_MODEL", "deepseek-chat"),
-                    DEEPSEEK_BASE_URL=getattr(runtime_config, "DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-                )
+                router_config = build_agent_router_config(settings_obj=settings, runtime_config=runtime_config)
                 router = AIProviderRouter(config=router_config)
                 ai_result = await router.analyze(ai_ctx, ai_mode)
 
@@ -1126,6 +1120,26 @@ class SignalProcessor:
                 "reasoning": ai_result.reasoning,
                 "key_factors": ai_result.key_factors,
             }
+            meta['agent_world_state'] = build_agent_world_state(
+                instrument_id=ticker,
+                sig_data=sig_data,
+                evaluation={
+                    'decision': evaluation.decision.value,
+                    'score': int(evaluation.score),
+                    'reasons': [getattr(r.code, 'value', str(r.code)) for r in evaluation.reasons],
+                },
+                portfolio_state={'trade_mode': trade_mode},
+                risk_state={
+                    'policy_state': getattr(policy_state, 'state', 'normal') if policy_state else 'normal',
+                    'governor': perf_governor,
+                },
+            )
+            meta['trader_agent_shadow'] = build_trader_agent_shadow(
+                ai_result=ai_result,
+                signal_id=signal_orm.id,
+                instrument_id=ticker,
+                final_decision=final_decision,
+            ).to_meta()
         meta["final_decision"] = final_decision
         meta['cognitive_layer'] = cognitive_payload
         review_readiness = _reconcile_review_readiness(meta.get('review_readiness'), conviction_profile)

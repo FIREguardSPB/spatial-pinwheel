@@ -118,6 +118,22 @@ class PipelineCountersRuntimeTests(unittest.TestCase):
         self.assertTrue(payload['degraded_throughput'])
         self.assertEqual(payload['suspected_cause'], 'reject_storm_frozen_mode')
 
+    def test_ai_runtime_summary_exposes_recent_shadow_agent_decision(self):
+        from core.services import ui_runtime as module
+
+        original_ai_repo = module.ai_repo.list_decisions
+        original_tokens = module.load_runtime_tokens
+        module.ai_repo.list_decisions = lambda _db, limit=1: [SimpleNamespace(provider='openai', decision='TAKE', confidence=81, reasoning='shadow trader liked the setup')]
+        module.load_runtime_tokens = lambda _db, _keys: {}
+        try:
+            payload = module.build_ai_runtime_summary(object(), SimpleNamespace(ai_primary_provider='openai', ai_fallback_providers='claude,deepseek,skip'))
+        finally:
+            module.ai_repo.list_decisions = original_ai_repo
+            module.load_runtime_tokens = original_tokens
+
+        self.assertEqual(payload['primary_provider'], 'openai')
+        self.assertTrue(payload['last_decision']['available'])
+
     def test_settings_runtime_snapshot_exposes_market_block(self):
         from core.services import ui_runtime as module
 
