@@ -213,6 +213,46 @@ def build_signal_flow_status(db, lookback_minutes: int = 60) -> dict[str, Any]:
         }
 
 
+def build_agent_shadow_runtime_summary(db, lookback_hours: int = 24) -> dict[str, Any]:
+    cutoff = _now_ms() - int(max(1, lookback_hours)) * 60 * 60 * 1000
+    try:
+        rows = (
+            db.query(Signal)
+            .filter(Signal.created_ts >= cutoff)
+            .all()
+        )
+        consensus_take = 0
+        challenger_challenges = 0
+        executed_after_consensus_take = 0
+        for row in rows:
+            meta = dict(getattr(row, 'meta', None) or {})
+            merge = dict(meta.get('agent_merge_shadow') or {})
+            thesis = dict(meta.get('agent_thesis_shadow') or {})
+            if str(merge.get('consensus_action') or '') == 'take':
+                consensus_take += 1
+                if str(getattr(row, 'status', '') or '') == 'executed':
+                    executed_after_consensus_take += 1
+            if str(merge.get('challenger_stance') or '') == 'challenge':
+                challenger_challenges += 1
+        return {
+            'status': 'ready',
+            'lookback_hours': int(lookback_hours),
+            'recent_signals': len(rows),
+            'consensus_take': consensus_take,
+            'challenger_challenges': challenger_challenges,
+            'executed_after_consensus_take': executed_after_consensus_take,
+        }
+    except Exception:
+        return {
+            'status': 'error',
+            'lookback_hours': int(lookback_hours),
+            'recent_signals': 0,
+            'consensus_take': 0,
+            'challenger_challenges': 0,
+            'executed_after_consensus_take': 0,
+        }
+
+
 def build_settings_runtime_snapshot(db) -> dict[str, Any]:
     settings_db = settings_repo.get_settings(db)
     from apps.api.status import build_bot_status_sync
@@ -256,4 +296,5 @@ def build_settings_runtime_snapshot(db) -> dict[str, Any]:
         'sentiment_runtime': build_sentiment_runtime_summary(db, settings_db),
         'pipeline_counters': build_pipeline_counters_summary(db, 24),
         'signal_flow': build_signal_flow_status(db, 60),
+        'agent_shadow_runtime': build_agent_shadow_runtime_summary(db, 24),
     }

@@ -81,7 +81,7 @@ from apps.worker.processor_support import (
 from core.ai.state_builder import build_agent_world_state
 from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
 from core.ai.challenger_shadow import build_challenger_agent_shadow
-from core.ai.agent_merge import apply_agent_authority, merge_agent_shadows
+from core.ai.agent_merge import apply_agent_authority, derive_agent_thesis_hints, merge_agent_shadows
 from core.ai.trader_shadow import build_trader_agent_shadow
 
 
@@ -1159,6 +1159,10 @@ class SignalProcessor:
                 challenger_shadow,
             )
             meta['agent_merge_shadow'] = merged_shadow
+            meta['agent_thesis_shadow'] = derive_agent_thesis_hints(
+                signal_meta=meta,
+                merged_shadow=merged_shadow,
+            )
             final_decision, agent_merge_reason = apply_agent_authority(
                 current_decision=final_decision,
                 score=int(event_adjusted_score),

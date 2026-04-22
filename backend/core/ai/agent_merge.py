@@ -28,3 +28,24 @@ def apply_agent_authority(*, current_decision: str, score: int, threshold: int, 
     if decision in {'REJECT', 'SKIP'} and consensus == 'take' and thesis_tf in {'5m', '15m'} and selection_reason in {'requested', 'confirmation'} and bool(conviction.get('rescue_eligible')) and int(score or 0) >= max(int(threshold or 0) - 10, 0) and int((merged_shadow or {}).get('trader_confidence') or 0) >= 80 and str((merged_shadow or {}).get('challenger_stance') or '') == 'approve':
         return 'TAKE', 'agent_consensus_take'
     return decision, ''
+
+
+def derive_agent_thesis_hints(*, signal_meta: dict[str, Any], merged_shadow: dict[str, Any]) -> dict[str, Any]:
+    selection_reason = str((signal_meta or {}).get('timeframe_selection_reason') or '')
+    thesis_tf = str((signal_meta or {}).get('thesis_timeframe') or '')
+    conviction = dict((signal_meta or {}).get('conviction_profile') or {})
+    consensus = str((merged_shadow or {}).get('consensus_action') or '')
+    challenger_stance = str((merged_shadow or {}).get('challenger_stance') or '')
+    trader_conf = int((merged_shadow or {}).get('trader_confidence') or 0)
+    thesis_state = 'fragile'
+    reentry_allowed = False
+    winner_management_intent = 'neutral'
+    if thesis_tf in {'5m', '15m'} and selection_reason in {'requested', 'confirmation'} and consensus == 'take' and challenger_stance == 'approve' and trader_conf >= 80:
+        thesis_state = 'alive'
+        reentry_allowed = bool(conviction.get('rescue_eligible'))
+        winner_management_intent = 'preserve'
+    return {
+        'thesis_state': thesis_state,
+        'reentry_allowed': reentry_allowed,
+        'winner_management_intent': winner_management_intent,
+    }

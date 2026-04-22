@@ -28,6 +28,7 @@ def compact_signal_meta(meta: dict[str, Any] | None) -> dict[str, Any]:
     trader_agent_shadow = meta.get('trader_agent_shadow') if isinstance(meta.get('trader_agent_shadow'), dict) else {}
     challenger_agent_shadow = meta.get('challenger_agent_shadow') if isinstance(meta.get('challenger_agent_shadow'), dict) else {}
     agent_merge_shadow = meta.get('agent_merge_shadow') if isinstance(meta.get('agent_merge_shadow'), dict) else {}
+    agent_thesis_shadow = meta.get('agent_thesis_shadow') if isinstance(meta.get('agent_thesis_shadow'), dict) else {}
     ml_overlay = meta.get('ml_overlay') if isinstance(meta.get('ml_overlay'), dict) else {}
     geometry_optimizer = meta.get('geometry_optimizer') if isinstance(meta.get('geometry_optimizer'), dict) else {}
     ai_fast_path = meta.get('ai_fast_path') if isinstance(meta.get('ai_fast_path'), dict) else {}
@@ -72,6 +73,11 @@ def compact_signal_meta(meta: dict[str, Any] | None) -> dict[str, Any]:
         'agent_merge_shadow': {
             'consensus_action': agent_merge_shadow.get('consensus_action'),
             'challenger_stance': agent_merge_shadow.get('challenger_stance'),
+        },
+        'agent_thesis_shadow': {
+            'thesis_state': agent_thesis_shadow.get('thesis_state'),
+            'reentry_allowed': agent_thesis_shadow.get('reentry_allowed'),
+            'winner_management_intent': agent_thesis_shadow.get('winner_management_intent'),
         },
         'auto_policy': {
             'state': auto_policy.get('state'),

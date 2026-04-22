@@ -57,6 +57,26 @@ class _FakeDB:
         raise AssertionError(f'unexpected model {model}')
 
 
+class _SignalRowsQuery:
+    def __init__(self, rows):
+        self.rows = rows
+    def filter(self, *_args, **_kwargs):
+        return self
+    def order_by(self, *_args, **_kwargs):
+        return self
+    def all(self):
+        return self.rows
+
+
+class _SignalRowsDB:
+    def __init__(self, rows):
+        self.rows = rows
+    def query(self, model):
+        if model is _SignalModel:
+            return _SignalRowsQuery(self.rows)
+        raise AssertionError(f'unexpected model {model}')
+
+
 class PipelineCountersRuntimeTests(unittest.TestCase):
     def test_pipeline_counters_include_cooldown_aware_proceeds(self):
         from core.services import ui_runtime as module
@@ -152,6 +172,25 @@ class PipelineCountersRuntimeTests(unittest.TestCase):
 
         self.assertEqual(payload['agent_shadow']['recent_calls'], 2)
         self.assertEqual(payload['agent_shadow']['challenger_challenges'], 1)
+
+    def test_agent_shadow_runtime_summary_counts_consensus_and_execution_followthrough(self):
+        from core.services import ui_runtime as module
+
+        orig_signal = module.Signal
+        module.Signal = _SignalModel
+        try:
+            rows = [
+                SimpleNamespace(status='executed', created_ts=1, meta={'agent_merge_shadow': {'consensus_action': 'take', 'challenger_stance': 'approve'}, 'agent_thesis_shadow': {'thesis_state': 'alive', 'reentry_allowed': True, 'winner_management_intent': 'preserve'}}),
+                SimpleNamespace(status='rejected', created_ts=2, meta={'agent_merge_shadow': {'consensus_action': 'review', 'challenger_stance': 'challenge'}, 'agent_thesis_shadow': {'thesis_state': 'fragile', 'reentry_allowed': False, 'winner_management_intent': 'neutral'}}),
+            ]
+            payload = module.build_agent_shadow_runtime_summary(_SignalRowsDB(rows), 24)
+        finally:
+            module.Signal = orig_signal
+
+        self.assertEqual(payload['recent_signals'], 2)
+        self.assertEqual(payload['consensus_take'], 1)
+        self.assertEqual(payload['challenger_challenges'], 1)
+        self.assertEqual(payload['executed_after_consensus_take'], 1)
 
     def test_settings_runtime_snapshot_exposes_market_block(self):
         from core.services import ui_runtime as module

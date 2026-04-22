@@ -3,7 +3,7 @@ from __future__ import annotations
 from apps.worker.ai.types import AIDecision, AIResult
 from core.ai.agent_contracts import ChallengerAgentShadowDecision, TraderAgentShadowDecision
 from core.ai.agent_clients import build_agent_router_config, build_challenger_shadow_from_ai_result
-from core.ai.agent_merge import apply_agent_authority, merge_agent_shadows
+from core.ai.agent_merge import apply_agent_authority, derive_agent_thesis_hints, merge_agent_shadows
 from core.ai.challenger_shadow import build_challenger_agent_shadow
 from core.ai.trader_shadow import build_trader_agent_shadow
 from core.ai.state_builder import build_agent_world_state
@@ -149,3 +149,22 @@ def test_build_challenger_shadow_from_ai_result_uses_real_ai_call_output_shape()
     assert challenger.stance == 'challenge'
     assert challenger.confidence == 88
     assert challenger.main_objections == ['economics conflict', 'weak local structure']
+
+
+def test_derive_agent_thesis_hints_marks_alive_reentry_and_winner_preservation():
+    hints = derive_agent_thesis_hints(
+        signal_meta={
+            'thesis_timeframe': '15m',
+            'timeframe_selection_reason': 'requested',
+            'conviction_profile': {'rescue_eligible': True},
+        },
+        merged_shadow={
+            'consensus_action': 'take',
+            'trader_confidence': 87,
+            'challenger_stance': 'approve',
+        },
+    )
+
+    assert hints['thesis_state'] == 'alive'
+    assert hints['reentry_allowed'] is True
+    assert hints['winner_management_intent'] == 'preserve'
