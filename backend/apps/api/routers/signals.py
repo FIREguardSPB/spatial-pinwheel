@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from apps.api.deps import verify_token
 from core.models import schemas
 from core.services.signal_meta_compact import compact_signal_meta
+from core.services.sector_filters import build_sector_overrides, get_instrument_sector_payload
 from core.storage.repos import settings as settings_repo
 from core.storage.repos import signals as repo
 from core.storage.session import get_db
@@ -23,6 +24,30 @@ def _compact_meta(meta: dict[str, Any] | None) -> dict[str, Any]:
     return compact_signal_meta(meta)
 
 
+def _signal_flow_class(meta: dict[str, Any], *, status: str | None, final_decision: str | None) -> str:
+    pre = meta.get('pre_persist_block') or {}
+    stage = str(pre.get('stage') or '')
+    if stage == 'policy_blocked':
+        return 'policy_blocked'
+    if stage == 'risk_blocked':
+        return 'risk_blocked'
+    status_norm = str(status or '').lower()
+    if status_norm == 'rejected':
+        return 'de_rejected'
+    if status_norm in {'approved', 'executed'}:
+        return 'trade_candidate'
+    if status_norm == 'pending_review':
+        return 'review_candidate'
+    decision = str(final_decision or '').upper()
+    if decision == 'TAKE':
+        return 'trade_candidate'
+    if decision == 'SKIP':
+        return 'strategy_skip'
+    if decision == 'REJECT':
+        return 'de_rejected'
+    return 'unknown'
+
+
 def serialize_signal(signal: Any, *, compact_meta: bool = False) -> dict[str, Any]:
     s_dict = {c.name: getattr(signal, c.name) for c in signal.__table__.columns}
     meta = s_dict.get('meta') or {}
@@ -30,6 +55,7 @@ def serialize_signal(signal: Any, *, compact_meta: bool = False) -> dict[str, An
     metrics = decision.get('metrics') if isinstance(decision, dict) else {}
     final_decision = _final_signal_decision(signal)
     s_dict['final_decision'] = final_decision
+    s_dict['display_status'] = str(s_dict.get('status') or '').lower() or ((str(final_decision or '').lower()) if final_decision else None)
     if metrics:
         s_dict['economic_summary'] = {
             'entry_price_rub': metrics.get('entry_price_rub'),
@@ -54,7 +80,13 @@ def serialize_signal(signal: Any, *, compact_meta: bool = False) -> dict[str, An
     strategy_name = _strategy_name_from_meta(meta)
     ai_influence = _ai_influence(meta, ai_influenced=bool(getattr(signal, 'ai_influenced', False)), ai_mode_used=getattr(signal, 'ai_mode_used', None))
     geometry = (meta.get('geometry_optimizer') if isinstance(meta, dict) else None) or {}
+    sector_payload = get_instrument_sector_payload(s_dict.get('instrument_id'))
+    meta = dict(meta or {})
+    meta.setdefault('sector_filters', build_sector_overrides(s_dict.get('instrument_id')))
     s_dict['strategy_name'] = strategy_name
+    s_dict['sector'] = sector_payload.get('sector_id')
+    s_dict['sector_display_name'] = sector_payload.get('display_name')
+    s_dict['meta'] = meta
     return s_dict, meta, ai_influence, geometry
 
 
@@ -169,6 +201,7 @@ def list_signals(limit: int = 50, status: str = Query(None), compact_meta: bool 
         s_dict['strategy_source'] = _strategy_source(meta, global_names=global_names)
         s_dict['ai_influence'] = ai_influence
         s_dict['reject_reason_priority'] = _reject_reason_priority(meta, ai_influence=ai_influence, global_names=global_names)
+        s_dict['signal_flow_class'] = _signal_flow_class(meta, status=s_dict.get('status'), final_decision=s_dict.get('final_decision'))
         s_dict['geometry_optimized'] = bool(geometry.get('applied'))
         s_dict['geometry_phase'] = geometry.get('phase')
         s_dict['geometry_action'] = geometry.get('action')
@@ -226,9 +259,10 @@ async def approve_signal(signal_id: str, payload: schemas.ApproveSignal, db: Ses
 
         from core.execution.paper import PaperExecutionEngine
         from core.execution.tbank import TBankExecutionEngine
+        from core.execution.controls import prefers_paper_execution
 
         trade_mode = getattr(runtime_settings, 'trade_mode', 'review') or 'review'
-        if trade_mode == 'auto_live':
+        if trade_mode == 'auto_live' and not prefers_paper_execution(runtime_settings):
             engine = TBankExecutionEngine(
                 db,
                 token=get_token('TBANK_TOKEN') or settings.TBANK_TOKEN,
